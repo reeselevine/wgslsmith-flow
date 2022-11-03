@@ -107,18 +107,22 @@ pub async fn run(
                     size: size as u64,
                     mapped_at_creation: true,
                 });
-                {
-                  let storage_slice = storage.slice(..);
-                  let mut mut_bytes = storage_slice.get_mapped_range_mut();
-                  mut_bytes.fill(1);
-                }
+                storage
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .fill(1);
                 storage.unmap();
                 let read = device.create_buffer(&BufferDescriptor {
                     label: None,
                     usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
                     size: size as u64,
-                    mapped_at_creation: false,
+                    mapped_at_creation: true,
                 });
+                read 
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .fill(1);
+                read.unmap();
 
                 buffer_sets.push(BufferSet::Storage {
                     binding: resource.binding,
