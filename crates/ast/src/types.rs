@@ -66,6 +66,15 @@ pub enum DataType {
 }
 
 impl DataType {
+
+    pub fn size_bytes(&self) -> usize {
+      match self {
+        // all currently supported scalars are four bytes
+        DataType::Scalar(_) => 4,
+        _ => unimplemented!()
+      }
+    }
+
     pub fn array(element_type: impl Into<DataType>, size: impl Into<Option<u32>>) -> DataType {
         DataType::Array(Rc::new(element_type.into()), size.into())
     }

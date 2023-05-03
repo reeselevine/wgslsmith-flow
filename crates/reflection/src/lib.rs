@@ -1,20 +1,22 @@
 use ast::{Module, StorageClass, VarQualifier};
-use common::BufferInit;
 pub use types::{PipelineDescription, PipelineResource, ResourceData, ResourceKind};
 
-fn update_size(value: &ast::DataType, init: &Option<BufferInit>) -> ast::DataType {
+
+
+fn update_size(value: &ast::DataType, init: &Option<Vec<u8>>) -> ast::DataType {
   match value {
-    ast::DataType::Array(inner, size) => ast::DataType::array (
+    ast::DataType::Array(inner, size) => {
+      ast::DataType::array (
       inner.as_ref().clone(),
-      size.or(init.as_ref().map(|i| i.size).flatten()),
-    ),
+      size.or(init.as_ref().map(|i| u32::try_from(i.len()/inner.size_bytes()).ok()).flatten()))
+    },
     other => other.clone()
   }
 }
 
 pub fn reflect(
     module: &Module,
-    mut init: impl FnMut(ResourceData<'_>) -> Option<BufferInit>,
+    mut init: impl FnMut(ResourceData<'_>) -> Option<Vec<u8>>,
 ) -> (PipelineDescription, Vec<common::Type>) {
     let mut resources = vec![];
     let mut types = vec![];
@@ -26,7 +28,6 @@ pub fn reflect(
                 StorageClass::Storage => ResourceKind::StorageBuffer,
                 _ => continue,
             };
-
 
             let group = var
                 .group_index()
@@ -42,16 +43,14 @@ pub fn reflect(
                 binding,
             });
 
-
             let data_type = update_size(&var.data_type, &buffer_init);
 
             let type_desc =
                 common::Type::try_from(&data_type).expect("invalid type for pipeline resource");
 
-            let init = buffer_init.map(|i| i.data)
-              .map(|mut init| {
-                init.resize(type_desc.buffer_size() as usize, 0);
-                init
+            let init = buffer_init.map(|mut init| {
+              init.resize(type_desc.buffer_size() as usize, 0);
+              init
             });
 
             resources.push(PipelineResource {
