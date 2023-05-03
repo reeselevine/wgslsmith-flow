@@ -44,6 +44,7 @@ pub fn get_adapters() -> Vec<types::Adapter> {
 
 pub async fn run(
     shader: &str,
+    workgroups: u32,
     meta: &PipelineDescription,
     config: &ConfigId,
 ) -> color_eyre::Result<Vec<Vec<u8>>> {
@@ -67,11 +68,17 @@ pub async fn run(
         let size = resource.size as usize;
         match resource.kind {
             ResourceKind::StorageBuffer => {
-                let storage = device.create_buffer(
-                    false,
+                let mut storage = device.create_buffer(
+                    true,
                     size,
                     DeviceBufferUsage::STORAGE | DeviceBufferUsage::COPY_SRC,
                 );
+
+                if let Some(init) = resource.init.as_deref() {
+                    storage.get_mapped_range(size).copy_from_slice(init);
+                }
+
+                storage.unmap();
 
                 let read = device.create_buffer(
                     false,
@@ -138,7 +145,7 @@ pub async fn run(
         let compute_pass = encoder.begin_compute_pass();
         compute_pass.set_pipeline(&pipeline);
         compute_pass.set_bind_group(0, &bind_group);
-        compute_pass.dispatch(1, 1, 1);
+        compute_pass.dispatch(workgroups, 1, 1);
     }
 
     for buffers in &buffer_sets {

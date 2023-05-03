@@ -35,6 +35,7 @@ pub fn get_adapters() -> Vec<types::Adapter> {
 
 pub async fn run(
     shader: &str,
+    workgroups: u32,
     meta: &PipelineDescription,
     config: &ConfigId,
 ) -> Result<Vec<Vec<u8>>> {
@@ -105,8 +106,17 @@ pub async fn run(
                     label: None,
                     usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
                     size: size as u64,
-                    mapped_at_creation: false,
+                    mapped_at_creation: true,
                 });
+
+                if let Some(init) = resource.init.as_deref() {
+                    storage 
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .copy_from_slice(init);
+                }
+
+                storage.unmap();
 
                 let read = device.create_buffer(&BufferDescriptor {
                     label: None,
@@ -181,7 +191,7 @@ pub async fn run(
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor::default());
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
+            pass.dispatch_workgroups(workgroups, 1, 1);
         }
         for buffer in &buffer_sets {
           if let BufferSet::Storage {

@@ -11,6 +11,7 @@ use eyre::{eyre, Context};
 use reflection::PipelineDescription;
 
 pub use printer::{ExecutionEvent, ExecutionResult, Printer};
+
 use types::ConfigId;
 
 pub fn read_input_data(
@@ -149,6 +150,7 @@ pub trait Executor {
     fn execute(
         &self,
         shader: &str,
+        workgroups: u32,
         flow: bool,
         pipeline_desc: &PipelineDescription,
         configs: &[ConfigId],
@@ -192,8 +194,13 @@ pub mod cli {
         #[clap(long, action, default_value = "30")]
         pub timeout: u64,
 
+        /// Run flow analysis
         #[clap(long, action, default_value = "false")]
         pub flow: bool,
+
+        /// Number of workgroups
+        #[clap(long, action, default_value = "1")]
+        pub workgroups: u32,
     }
 
     pub fn run(options: RunOptions, executor: &dyn Executor) -> eyre::Result<()> {
@@ -224,6 +231,7 @@ pub mod cli {
         executor
             .execute(
                 &shader,
+                options.workgroups,
                 options.flow,
                 &pipeline_desc,
                 &options.configs,
