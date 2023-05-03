@@ -20,7 +20,9 @@ pub enum FnAttr {
     #[display(fmt = "stage({_0})")]
     Stage(ShaderStage),
     #[display(fmt = "workgroup_size({_0})")]
-    WorkgroupSize(u32),
+    LitWorkgroupSize(u32),
+    #[display(fmt = "workgroup_size({_0})")]
+    VarWorkgroupSize(String)
 }
 
 #[derive(Clone, Debug, Display, PartialEq, Eq)]

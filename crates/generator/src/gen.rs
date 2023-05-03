@@ -205,7 +205,7 @@ impl<'a> Generator<'a> {
         FnDecl {
             attrs: vec![
                 FnAttr::Stage(ShaderStage::Compute),
-                FnAttr::WorkgroupSize(1),
+                FnAttr::LitWorkgroupSize(1),
             ],
             name: "main".to_owned(),
             inputs: vec![],
