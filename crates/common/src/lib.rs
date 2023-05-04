@@ -1,5 +1,3 @@
-use serde::Deserialize;
-
 #[derive(Debug)]
 pub enum ScalarType {
     I32,

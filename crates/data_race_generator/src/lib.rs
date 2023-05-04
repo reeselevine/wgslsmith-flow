@@ -7,9 +7,9 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::rc::Rc;
 
-use ast::{BuiltinFn, StorageClass, VarQualifier};
+use ast::{StorageClass, VarQualifier};
 use clap::Parser;
-use eyre::{bail, eyre};
+use eyre::{eyre};
 use hashers::fx_hash::FxHasher;
 
 pub use data_race_gen::{Generator};
@@ -31,28 +31,36 @@ pub struct Options {
     #[clap(long, action)]
     pub log: Option<String>,
 
+    /// Workgroup size 
+    #[clap(long, action, default_value = "1")]
+    pub workgroup_size: u32,
+
+    /// Percentage of memory locations which can participate in races 
+    #[clap(long, action, default_value = "20")]
+    pub racy_loc_pct: u32,
+
     /// Number of literals to generate
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "4")]
     pub num_lits: u32,
 
     /// Minimum number of statements to generate
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "8")]
     pub min_stmts: u32,
 
     /// Maximum number of statements to generate
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "8")]
     pub max_stmts: u32,
 
     /// Minimum number of local variables to generate
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "4")]
     pub min_vars: u32,
 
     /// Maximum number of local variables to generate
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "4")]
     pub max_vars: u32,
 
     /// Number of memory locations associated with each thread 
-    #[clap(long, action, default_value = "5")]
+    #[clap(long, action, default_value = "8")]
     pub locs_per_thread: u32,
 
     /// Path to output file (use `-` for stdout)
@@ -71,7 +79,7 @@ impl BuildHasher for BuildFxHasher {
     }
 }
 
-pub fn run(mut options: Options) -> eyre::Result<()> {
+pub fn run(options: Options) -> eyre::Result<()> {
     let options = Rc::new(options);
 
     let seed = match options.seed {
@@ -82,7 +90,7 @@ pub fn run(mut options: Options) -> eyre::Result<()> {
     tracing::info!("generating shader from seed: {}", seed);
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut shader = Generator::new(&mut rng, options.clone()).gen_module();
+    let shader = Generator::new(&mut rng, options.clone()).gen_module();
 
     let mut output: Box<dyn io::Write> = if options.output == "-" {
         Box::new(io::stdout())

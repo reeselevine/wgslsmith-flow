@@ -73,7 +73,7 @@ impl Thread {
                 .map(|atr| {
                     match atr {
                         // Change workgroup size
-                        FnAttr::WorkgroupSize(_) => FnAttr::WorkgroupSize(self.workg_count),
+                        FnAttr::LitWorkgroupSize(_) => FnAttr::LitWorkgroupSize(self.workg_count),
                         // Leave any other attr alone
                         _ => atr,
                     }

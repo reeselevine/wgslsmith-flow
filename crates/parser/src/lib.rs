@@ -304,13 +304,24 @@ fn parse_function_decl(pair: Pair<Rule>, env: &mut Environment) -> FnDecl {
                         "fragment" => ShaderStage::Fragment,
                         _ => panic!("invalid argument for stage attr"),
                     }),
-                    "workgroup_size" => FnAttr::WorkgroupSize(
-                        match parse_literal_expression(pairs.next().unwrap()).expr {
-                            Expr::Lit(Lit::I32(v)) => v.try_into().unwrap(),
-                            Expr::Lit(Lit::U32(v)) => v,
-                            _ => panic!("invalid argument for workgroup_size attr"),
+                    "workgroup_size" => {
+                      let next_pair = pairs.next().unwrap();
+                      let expr = match next_pair.as_rule() {
+                        Rule::literal_expression => {
+                          parse_literal_expression(next_pair)
                         },
-                    ),
+                        Rule::ident => {
+                          parse_var_expression(next_pair, env)
+                        }
+                        _ => panic!{"invalid argument for workgroup_size attr"}
+                      };
+                      match expr.expr {
+                        Expr::Lit(Lit::I32(v)) => FnAttr::LitWorkgroupSize(v.try_into().unwrap()),
+                        Expr::Lit(Lit::U32(v)) => FnAttr::LitWorkgroupSize(v),
+                        Expr::Var(VarExpr { ident: v }) => FnAttr::VarWorkgroupSize(v),
+                        _ => panic!("invalid argument for workgroup_size attr"),
+                      }
+                    },
                     _ => panic!("invalid function attribute: {}", name),
                 }
             })
