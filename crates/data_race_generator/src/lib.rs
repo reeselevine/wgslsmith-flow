@@ -12,7 +12,7 @@ use clap::Parser;
 use eyre::{eyre};
 use hashers::fx_hash::FxHasher;
 
-pub use data_race_gen::{Generator};
+pub use data_race_gen::{Generator, Outputs};
 use rand::prelude::StdRng;
 use rand::rngs::OsRng;
 use rand::{Rng, SeedableRng};
@@ -90,7 +90,11 @@ pub fn run(options: Options) -> eyre::Result<()> {
     tracing::info!("generating shader from seed: {}", seed);
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let shader = Generator::new(&mut rng, options.clone()).gen_module();
+    let out = Generator::new(&mut rng, options.clone()).gen_module();
+    
+    let safe_shader = out.safe;
+    let race_shader = out.race;
+    let json_info = out.info;
 
     let mut output: Box<dyn io::Write> = if options.output == "-" {
         Box::new(io::stdout())
@@ -104,7 +108,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
     if !options.debug {
         let mut init_data = HashMap::new();
 
-        for var in &shader.vars {
+        for var in &race_shader.vars {
             if let Some(VarQualifier { storage_class, .. }) = &var.qualifier {
                 if *storage_class != StorageClass::Uniform {
                     continue;
@@ -130,7 +134,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
     }
 
     if options.debug {
-        writeln!(output, "{shader:#?}")?;
+        writeln!(output, "{race_shader:#?}")?;
     } else {
         struct Output<'a>(&'a mut dyn std::io::Write);
 
@@ -141,7 +145,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             }
         }
 
-        ast::writer::Writer::default().write_module(&mut Output(&mut output), &shader)?;
+        ast::writer::Writer::default().write_module(&mut Output(&mut output), &race_shader)?;
     }
 
     Ok(())

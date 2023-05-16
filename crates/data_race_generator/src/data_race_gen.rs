@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use serde_json::json;
+
 use ast::types::{DataType, ScalarType, MemoryViewType};
 use ast::{
     AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, FnAttr, FnDecl, GlobalVarAttr,
@@ -30,6 +32,7 @@ impl Distribution<OpType> for Standard {
   }
 }
 
+#[derive(PartialEq, Eq, Copy, Clone)]
 enum AccessType {
   Safe,
   Unsafe,
@@ -49,6 +52,11 @@ impl Distribution<AccessType> for Standard {
   }
 }
 
+pub struct Outputs {
+    pub safe: Module,
+    pub race: Module,
+    pub info: serde_json::Value
+}
 
 pub struct Generator<'a> {
     rng: &'a mut StdRng,
@@ -72,7 +80,7 @@ impl<'a> Generator<'a> {
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn gen_module(&mut self) -> Module {
+    pub fn gen_module(&mut self) -> Outputs {
         let global_vars = vec![
             GlobalVarDecl {
                 attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
@@ -115,9 +123,19 @@ impl<'a> Generator<'a> {
             block.push(self.initialize_var(name));
         }
 
+        // Make a block to store statements that are safe
+        let mut safe_block: Vec<Statement> = block.clone();
+
         let statement_count = self.rng.gen_range(self.options.min_stmts..=self.options.max_stmts);
         for _i in 0..statement_count {
-          block.push(self.gen_statement());
+          // Return a pair of AccessType + Statement
+          // Then match, if safe add to both modules otherwise only to the race module
+          let (stmt, access_type) = self.gen_statement();
+          println!("stmt: {:?}", stmt);
+          if access_type == AccessType::Safe {
+            safe_block.push(stmt.clone());
+          }
+          block.push(stmt);
         }
 
         let mut num_workgroups = FnInput::new("num_workgroups", DataType::Vector(3, ScalarType::U32));
@@ -133,19 +151,45 @@ impl<'a> Generator<'a> {
                 FnAttr::LitWorkgroupSize(self.options.workgroup_size),
             ],
             name: "main".to_owned(),
-            inputs: vec![num_workgroups, workgroup_id, local_invocation_id],
+            inputs: vec![num_workgroups.clone(), workgroup_id.clone(), local_invocation_id.clone()],
             output: None,
             body: block,
         };
 
-        let functions = vec![entrypoint];
+        let safe_entrypoint = FnDecl {
+            attrs: vec![
+                FnAttr::Stage(ShaderStage::Compute),
+                FnAttr::LitWorkgroupSize(self.options.workgroup_size),
+            ],
+            name: "main".to_owned(),
+            inputs: vec![num_workgroups, workgroup_id, local_invocation_id],
+            output: None,
+            body: safe_block,
+        };
 
-        Module {
-            structs: vec![],
-            consts: vec![], 
-            vars: global_vars,
-            functions
-        }
+        let functions = vec![entrypoint];
+        let safe_functions = vec![safe_entrypoint];
+
+        // Write the safe values to a json file to be read later
+        let json_info = json!({
+            "safe": self.safe_offsets
+        });
+        
+        Outputs {
+            safe: Module {
+                    structs: vec![],
+                    consts: vec![], 
+                    vars: global_vars.clone(),
+                    functions: safe_functions
+                },
+            race: Module {
+                    structs: vec![],
+                    consts: vec![],
+                    vars: global_vars.clone(),
+                    functions
+                },
+            info: json_info
+        } 
     }
 
     fn initialize_var(&mut self, name: String) -> Statement {
@@ -225,16 +269,16 @@ impl<'a> Generator<'a> {
         self.gen_op(right_access_ty)).into()
     }
 
-    fn gen_statement(&mut self) -> Statement {
+    fn gen_statement(&mut self) -> (Statement, AccessType) {
       let access_type: AccessType = self.rng.gen();
-      let expr = self.gen_expr(&access_type);
-      AssignmentStatement::new(
+      let expr = self.gen_expr(&access_type.clone());
+      (AssignmentStatement::new(
         AssignmentLhs::array_index(
           "mem", 
           DataType::Ref(MemoryViewType::new(
             DataType::array(ScalarType::U32, None), StorageClass::Storage)),
             self.gen_mem_idx(access_type)), 
         AssignmentOp::Simple,
-        expr).into()
+        expr).into(), access_type)
     }
 }
