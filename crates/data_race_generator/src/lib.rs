@@ -36,32 +36,36 @@ pub struct Options {
     pub workgroup_size: u32,
 
     /// Percentage of memory locations which can participate in races 
-    #[clap(long, action, default_value = "20")]
+    #[clap(long, action, default_value = "50")]
     pub racy_loc_pct: u32,
+
+    /// Percentage of constant memory locations which can participate in races 
+    #[clap(long, action, default_value = "50")]
+    pub racy_constant_loc_pct: u32,
+
+    /// Percentage of local variables which can participate in races 
+    #[clap(long, action, default_value = "50")]
+    pub racy_var_pct: u32,
 
     /// Number of literals to generate
     #[clap(long, action, default_value = "4")]
     pub num_lits: u32,
 
-    /// Minimum number of statements to generate
+    /// Number of statements to generate
     #[clap(long, action, default_value = "8")]
-    pub min_stmts: u32,
+    pub stmts: u32,
 
-    /// Maximum number of statements to generate
+    /// Number of local variables to generate
     #[clap(long, action, default_value = "8")]
-    pub max_stmts: u32,
-
-    /// Minimum number of local variables to generate
-    #[clap(long, action, default_value = "4")]
-    pub min_vars: u32,
-
-    /// Maximum number of local variables to generate
-    #[clap(long, action, default_value = "4")]
-    pub max_vars: u32,
+    pub vars: u32,
 
     /// Number of memory locations associated with each thread 
     #[clap(long, action, default_value = "8")]
     pub locs_per_thread: u32,
+
+    /// Number of constant memory locations
+    #[clap(long, action, default_value = "16")]
+    pub constant_locs: u32,
 
     /// Path to output file (use `-` for stdout)
     #[clap(short, long, action, default_value = "-")]
