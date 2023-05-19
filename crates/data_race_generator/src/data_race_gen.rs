@@ -12,7 +12,7 @@ use ast::{
 use rand::distributions::{WeightedIndex};
 use rand::prelude::{SliceRandom, StdRng};
 use rand::Rng;
-use rand_distr::{Distribution, Standard};
+use rand_distr::Distribution;
 
 use crate::Options;
 
@@ -26,46 +26,6 @@ enum AccessType {
   VarSafe,
   VarUnsafe,
   Literal
-}
-
-impl Distribution<AccessType> for Standard {
-  fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> AccessType {
-      match rng.gen_range(0..100) {
-          0..=12 => AccessType::ThreadSafe,
-          13..=25 => AccessType::ThreadUnsafe,
-          26..=38 => AccessType::ThreadRace,
-          39..=51 => AccessType::ConstantSafe,
-          52..=63 => AccessType::ConstantUnsafe,
-          64..=75 => AccessType::VarSafe,
-          76..=87 => AccessType::VarUnsafe,
-          88..=99 => AccessType::Literal,
-          _ => unreachable!(),
-      }
-  }
-}
-
-#[derive(PartialEq, Eq, Copy, Clone)]
-enum LhsAccessType {
-  ThreadSafe,
-  ThreadUnsafe,
-  ThreadRace,
-  ConstantUnsafe,
-  VarSafe,
-  VarUnsafe
-}
-
-impl Distribution<LhsAccessType> for Standard {
-  fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> LhsAccessType {
-      match rng.gen_range(0..100) {
-          0..=16 => LhsAccessType::ThreadSafe,
-          17..=33 => LhsAccessType::ThreadUnsafe,
-          34..=50 => LhsAccessType::ThreadRace,
-          51..=67 => LhsAccessType::ConstantUnsafe,
-          68..=83 => LhsAccessType::VarSafe,
-          84..=99 => LhsAccessType::VarUnsafe,
-          _ => unreachable!(),
-      }
-  }
 }
 
 pub struct Outputs {
@@ -84,29 +44,160 @@ pub struct Generator<'a> {
     racy_offsets: Vec<u32>,
     safe_constant_locs: Vec<u32>,
     racy_constant_locs: Vec<u32>,
-    safe_access_types: Vec<AccessType>,
-    safe_weights: WeightedIndex<i32>,
+    rhs_access_types: Vec<AccessType>,
+    rhs_weights: WeightedIndex<i32>,
+    safe_rhs_access_types: Vec<AccessType>,
+    safe_rhs_weights: WeightedIndex<i32>,
     lhs_access_types: Vec<AccessType>,
     lhs_weights: WeightedIndex<i32>
 }
 
 impl<'a> Generator<'a> {
     pub fn new(rng: &'a mut StdRng, options: Rc<Options>) -> Self {
-        Generator {
-            rng,
-            options: options.clone(),
-            safe_vars: vec![],
-            racy_vars: vec![],
-            lits: vec![],
-            safe_offsets: vec![],
-            racy_offsets: vec![],
-            safe_constant_locs: vec![],
-            racy_constant_locs: vec![],
-            safe_access_types: vec![AccessType::ThreadSafe, AccessType::ConstantSafe, AccessType::VarSafe, AccessType::Literal],
-            safe_weights: WeightedIndex::new(vec![30, 30, 20, 20]).unwrap(),
-            lhs_access_types: vec![AccessType::ThreadSafe, AccessType::ThreadUnsafe, AccessType::ThreadRace, AccessType::ConstantUnsafe, AccessType::VarSafe, AccessType::VarUnsafe],
-            lhs_weights: WeightedIndex::new(vec![17, 17, 17, 17, 16, 16]).unwrap()
+
+      let mut lhs_access_types = vec![];
+      let mut rhs_access_types = vec![AccessType::Literal];
+      let mut safe_rhs_access_types = vec![AccessType::Literal];
+
+      let mut lits = vec![];
+      // Create literals used in the program 
+      for i in 0..options.num_lits {
+        lits.push(i);
+      }
+
+      // The first N memory locations are divided into safe (read-only) and racy (read-write)
+      let mut racy_constant_locs = vec![];
+      let mut safe_constant_locs = vec![];
+      for i in 0..options.constant_locs {
+        if Self::rng_less_than(rng, options.racy_constant_loc_pct) {
+          racy_constant_locs.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ConstantUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ConstantUnsafe);
+        } else {
+          safe_constant_locs.push(i);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ConstantSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::ConstantSafe);
         }
+      }
+
+      // Each thread's memory locations are divided into safe (read-write only by this thread)
+      // and racy (read-write by any thread)
+      let mut racy_offsets = vec![];
+      let mut safe_offsets = vec![];
+
+      for i in 0..options.locs_per_thread {
+        if Self::rng_less_than(rng, options.racy_loc_pct) {
+          racy_offsets.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadUnsafe);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadRace);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadRace);
+        } else {
+          safe_offsets.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadSafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::ThreadSafe);
+        }
+      }
+
+      // local variables are also divided into safe and racy
+      let mut racy_vars = vec![];
+      let mut safe_vars = vec![];
+      for i in 0..options.vars {
+        let name = format!("var_{i}");
+        if Self::rng_less_than(rng, options.racy_var_pct) {
+          racy_vars.push(name.to_owned());
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarUnsafe);
+        } else {
+          safe_vars.push(name.to_owned());
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarSafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::VarSafe);
+        }
+      }
+
+      let mut lhs_weight_values = vec![];
+      for access_type in &lhs_access_types {
+        lhs_weight_values.push(Self::lhs_access_type_weight(access_type));
+      }
+      let lhs_weights = WeightedIndex::new(lhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
+
+      let mut rhs_weight_values = vec![];
+      for access_type in &rhs_access_types {
+        rhs_weight_values.push(Self::rhs_access_type_weight(access_type));
+      }
+      let rhs_weights = WeightedIndex::new(rhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
+
+      let mut safe_rhs_weight_values = vec![];
+      for access_type in &safe_rhs_access_types {
+        safe_rhs_weight_values.push(Self::safe_rhs_access_type_weight(access_type));
+      }
+      let safe_rhs_weights = WeightedIndex::new(safe_rhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
+
+
+      Generator {
+        rng,
+        options: options.clone(),
+        safe_vars, 
+        racy_vars,
+        lits,
+        safe_offsets,
+        racy_offsets,
+        safe_constant_locs,
+        racy_constant_locs,
+        rhs_access_types,
+        rhs_weights,
+        safe_rhs_access_types,
+        safe_rhs_weights,
+        lhs_access_types,
+        lhs_weights
+      }
+    }
+
+    fn add_if_not_exists<T: PartialEq>(vector: &mut Vec<T>, value: T) {
+      if !vector.contains(&value) {
+        vector.push(value);
+      }
+    }
+
+    fn rng_less_than(rng: &mut StdRng, pct: u32) -> bool {
+      return rng.gen_range(0..100) < pct;
+    }
+
+    fn lhs_access_type_weight(access_type: &AccessType) -> i32 {
+      match access_type {
+        AccessType::ThreadSafe => 17,
+        AccessType::ThreadUnsafe => 17,
+        AccessType::ThreadRace => 17,
+        AccessType::ConstantUnsafe => 17,
+        AccessType::VarSafe => 16,
+        AccessType::VarUnsafe => 16,
+        _ => 0
+      }
+    }
+
+    fn rhs_access_type_weight(access_type: &AccessType) -> i32 {
+      match access_type {
+        AccessType::ThreadSafe => 13,
+        AccessType::ThreadUnsafe => 13,
+        AccessType::ThreadRace => 13,
+        AccessType::ConstantSafe => 13,
+        AccessType::ConstantUnsafe => 12,
+        AccessType::VarSafe => 12,
+        AccessType::VarUnsafe => 12,
+        AccessType::Literal => 12
+      }
+    }
+
+    fn safe_rhs_access_type_weight(access_type: &AccessType) -> i32 {
+       match access_type {
+        AccessType::ThreadSafe => 30,
+        AccessType::ConstantSafe => 30,
+        AccessType::VarSafe => 20,
+        AccessType::Literal => 20,
+        _ => 0
+      }
     }
 
     #[tracing::instrument(skip(self))]
@@ -124,29 +215,6 @@ impl<'a> Generator<'a> {
             }
         ];
 
-        // Create literals used in the program 
-        for i in 0..self.options.num_lits {
-          self.lits.push(i);
-        }
-
-        // The first N memory locations are divided into safe (read-only) and racy (read-write)
-        for i in 0..self.options.constant_locs {
-          if self.rng_less_than(self.options.racy_constant_loc_pct) {
-            self.racy_constant_locs.push(i);
-          } else {
-            self.safe_constant_locs.push(i);
-          }
-        }
-
-        // Each thread's memory locations are divided into safe (read-write only by this thread)
-        // and racy (read-write by any thread)
-        for i in 0..self.options.locs_per_thread {
-          if self.rng_less_than(self.options.racy_loc_pct) {
-            self.racy_offsets.push(i);
-          } else {
-            self.safe_offsets.push(i);
-          }
-        }
 
         let mut block: Vec<Statement> = vec![];
 
@@ -158,15 +226,12 @@ impl<'a> Generator<'a> {
             VarExpr::new("num_workgroups.x").into_node(DataType::from(ScalarType::U32)), 
             ExprNode::from(Lit::U32(self.options.workgroup_size)))).into());
 
-        // local variables are also divided into safe and racy
-        for i in 0..self.options.vars {
-            let name = format!("var_{i}");
-            if self.rng_less_than(self.options.racy_var_pct) {
-              self.racy_vars.push(name.to_owned());
-            } else {
-              self.safe_vars.push(name.to_owned());
-            }
-            block.push(self.initialize_var(name));
+        for var in self.safe_vars.to_owned() {
+          block.push(self.initialize_var(var));
+        }
+
+        for var in self.racy_vars.to_owned() {
+          block.push(self.initialize_var(var));
         }
 
         // Make a block to store statements that are safe
@@ -176,7 +241,7 @@ impl<'a> Generator<'a> {
           // Return a pair of AccessType + Statement
           // Then match, if safe add to both modules otherwise only to the race module
           let (stmt, access_type) = self.gen_statement();
-          if self.safe_access_types.contains(&access_type) {
+          if self.safe_rhs_access_types.contains(&access_type) {
             safe_block.push(stmt.clone());
           }
           block.push(stmt);
@@ -322,16 +387,16 @@ impl<'a> Generator<'a> {
     }
 
     fn gen_expr(&mut self, access_type: &AccessType) -> ExprNode {
-      let left_access_type = if self.safe_access_types.contains(access_type) {
-        self.safe_access_types[self.safe_weights.sample(self.rng)]
+      let left_access_type = if self.safe_rhs_access_types.contains(access_type) {
+        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
       } else {
-        self.rng.gen()
+        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
       };
 
-      let right_access_type = if self.safe_access_types.contains(access_type) {
-        self.safe_access_types[self.safe_weights.sample(self.rng)]
+      let right_access_type = if self.safe_rhs_access_types.contains(access_type) {
+        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
       } else {
-        self.rng.gen()
+        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
       };
 
       BinOpExpr::new(
@@ -362,9 +427,5 @@ impl<'a> Generator<'a> {
         expr).into()
       };
       (stmt, lhs_access_type)
-    }
-
-    fn rng_less_than(&mut self, pct: u32) -> bool {
-      return self.rng.gen_range(0..100) < pct;
     }
 }
