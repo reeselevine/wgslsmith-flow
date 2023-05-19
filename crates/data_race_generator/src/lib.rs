@@ -7,7 +7,7 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::rc::Rc;
 
-use ast::{StorageClass, VarQualifier};
+use ast::{StorageClass, VarQualifier, Module};
 use clap::Parser;
 use eyre::{eyre};
 use hashers::fx_hash::FxHasher;
@@ -83,36 +83,26 @@ impl BuildHasher for BuildFxHasher {
     }
 }
 
-pub fn run(options: Options) -> eyre::Result<()> {
-    let options = Rc::new(options);
-
-    let seed = match options.seed {
-        Some(seed) => seed,
-        None => OsRng.gen(),
-    };
-
-    tracing::info!("generating shader from seed: {}", seed);
-
-    let mut rng = StdRng::seed_from_u64(seed);
-    let out = Generator::new(&mut rng, options.clone()).gen_module();
-    
-    let safe_shader = out.safe;
-    let race_shader = out.race;
-    let json_info = out.info;
-
+fn output_helper(options: Rc<Options>, source: Module, prefix: &str, rng: &mut StdRng, seed: u64) -> eyre::Result<()> {
+    // Create a writer to file input and prepend "race_<filename>.wgsl"
     let mut output: Box<dyn io::Write> = if options.output == "-" {
         Box::new(io::stdout())
     } else {
         if let Some(dir) = Path::new(&options.output).parent() {
             std::fs::create_dir_all(dir)?;
         }
-        Box::new(BufWriter::new(File::create(&options.output)?))
+        let out = options.output.rsplit_once('/');
+        let new_path = match out {
+                         Some((a, b)) => a.to_owned() + "/" + prefix + "_" + b,
+                         None => prefix.to_owned() + "_" + &options.output
+                       };
+        Box::new(BufWriter::new(File::create(new_path)?))
     };
 
     if !options.debug {
         let mut init_data = HashMap::new();
 
-        for var in &race_shader.vars {
+        for var in &source.vars {
             if let Some(VarQualifier { storage_class, .. }) = &var.qualifier {
                 if *storage_class != StorageClass::Uniform {
                     continue;
@@ -138,7 +128,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
     }
 
     if options.debug {
-        writeln!(output, "{race_shader:#?}")?;
+        writeln!(output, "{source:#?}")?;
     } else {
         struct Output<'a>(&'a mut dyn std::io::Write);
 
@@ -149,8 +139,47 @@ pub fn run(options: Options) -> eyre::Result<()> {
             }
         }
 
-        ast::writer::Writer::default().write_module(&mut Output(&mut output), &race_shader)?;
+        ast::writer::Writer::default().write_module(&mut Output(&mut output), &source)?;
     }
+    Ok(())
+   
+}
+
+pub fn run(options: Options) -> eyre::Result<()> {
+    let options = Rc::new(options);
+
+    let seed = match options.seed {
+        Some(seed) => seed,
+        None => OsRng.gen(),
+    };
+
+    tracing::info!("generating shader from seed: {}", seed);
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let out = Generator::new(&mut rng, options.clone()).gen_module();
+    
+    let safe_shader = out.safe;
+    let race_shader = out.race;
+    let json_info = out.info;
+
+    output_helper(options.clone(), race_shader, "race", &mut rng, seed)?;
+    output_helper(options.clone(), safe_shader, "safe", &mut rng, seed)?;
+
+    let mut output: Box<dyn io::Write> = if options.output == "-" {
+        Box::new(io::stdout())
+    } else {
+        if let Some(dir) = Path::new(&options.output).parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let out = options.output.rsplit_once('/');
+        let new_path = match out {
+                         Some((a, _)) => a.to_owned() + "/info.json",
+                         None => "info.json".to_string()
+                       };
+        Box::new(BufWriter::new(File::create(new_path)?))
+    };
+
+    writeln!(output, "{json_info}")?;
 
     Ok(())
 }
