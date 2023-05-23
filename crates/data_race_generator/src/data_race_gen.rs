@@ -281,7 +281,10 @@ impl<'a> Generator<'a> {
 
         // Write the safe values to a json file to be read later
         let json_info = json!({
-            "safe": self.safe_offsets
+            "safe": self.safe_offsets,
+            "locs_per_thread": self.options.locs_per_thread,
+            "safe_constants": self.safe_constant_locs,
+            "constant_locs": self.options.constant_locs
         });
         
         Outputs {
@@ -353,7 +356,7 @@ impl<'a> Generator<'a> {
           BinOpExpr::new(
             BinOp::Plus,
             base_id,
-            ExprNode::from(Lit::U32(offset))).into()
+            ExprNode::from(Lit::U32(offset + self.options.constant_locs))).into()
         }
         _ => unreachable!()
       }
