@@ -371,6 +371,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3616f750b84d8f0de8a58bda93e08e2a81ad3f523089b05f1dffecab48c6cbd"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "winapi",
+]
+
+[[package]]
 name = "common"
 version = "0.1.0"
 dependencies = [
@@ -396,6 +407,27 @@ name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "coordinator"
+version = "0.1.0"
+dependencies = [
+ "ast",
+ "bincode",
+ "byteorder",
+ "clap 3.2.2",
+ "colored",
+ "common",
+ "data_race_generator",
+ "eyre",
+ "harness",
+ "harness-types",
+ "parser",
+ "rand",
+ "reflection",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "core-foundation"
@@ -1219,6 +1251,23 @@ dependencies = [
 
 [[package]]
 name = "naga"
+version = "0.8.0"
+dependencies = [
+ "bit-set",
+ "bitflags",
+ "codespan-reporting",
+ "hexf-parse",
+ "indexmap",
+ "log",
+ "num-traits",
+ "rustc-hash",
+ "termcolor",
+ "thiserror",
+ "unicode-xid",
+]
+
+[[package]]
+name = "naga"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "262d2840e72dbe250e8cf2f522d080988dfca624c4112c096238a4845f591707"
@@ -1232,23 +1281,6 @@ dependencies = [
  "num-traits",
  "rustc-hash",
  "spirv",
- "termcolor",
- "thiserror",
- "unicode-xid",
-]
-
-[[package]]
-name = "naga"
-version = "0.11.0"
-dependencies = [
- "bit-set",
- "bitflags",
- "codespan-reporting",
- "hexf-parse",
- "indexmap",
- "log",
- "num-traits",
- "rustc-hash",
  "termcolor",
  "thiserror",
  "unicode-xid",
@@ -2469,7 +2501,7 @@ dependencies = [
  "harness-frontend",
  "harness-server-types",
  "harness-types",
- "naga 0.11.0",
+ "naga 0.8.0",
  "nix",
  "parser",
  "rand",
@@ -2631,4 +2663,4 @@ dependencies = [
 
 [[patch.unused]]
 name = "wgpu"
-version = "0.15.0"
+version = "0.12.0"
