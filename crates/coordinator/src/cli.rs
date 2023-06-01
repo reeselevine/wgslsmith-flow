@@ -114,10 +114,10 @@ pub struct Info{
 
 pub fn run(options: Options) -> eyre::Result<()> {
     // 1) Construct a data race gen Options struct
-    let mut iteration: u32 = 0;
+    let mut iteration: u128 = 0;
 
     // 2) Loop and run for repeat times
-    while options.inf_run || iteration < options.repeat {
+    while options.inf_run || iteration < options.repeat.into() {
         fs::create_dir_all(options.target.clone() + &"/".to_owned() + &iteration.to_string())?;
         let opt = data_race_generator::Options {
             seed: options.seed,
@@ -231,10 +231,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
             writer.write_all(out.as_bytes())?;
         }
-        
-        if !options.inf_run {        
-            iteration+=1;
-        }
+            
+        iteration+=1;
     }
         // 2a) update the output field of the Options struct with the loop file name
 
