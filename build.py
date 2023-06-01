@@ -157,8 +157,11 @@ def build_harness():
     print(f"> building harness (target={build_target})")
     cargo_build("harness", target=args.target)
 
+def build_coordinator():
+    print(f"> building coordinator (target={build_target})")
+    cargo_build("coordinator", target=args.target)
 
-if args.task not in {"wgslsmith", "harness", "install"}:
+if args.task not in {"wgslsmith", "harness", "install", "coordinator"}:
     print(f"invalid task: {args.task}")
     exit(1)
 
@@ -194,6 +197,8 @@ if args.task == "wgslsmith":
     tasks += [build_wgslsmith]
 elif args.task == "harness":
     tasks += [build_dawn, build_harness]
+elif args.task == "coordinator":
+    tasks += [build_dawn, build_coordinator]
 
 for task in tasks:
     task()

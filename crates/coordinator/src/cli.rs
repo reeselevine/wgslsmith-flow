@@ -25,7 +25,7 @@ use reflection::PipelineDescription;
 #[derive(Parser)]
 pub struct Options {
     /// Location that files will be put in, by default working directory
-    #[clap(action, default_value = "/")]
+    #[clap(action, default_value = ".")]
     pub target: String,
 
     /// Number of times for files to be generated and tested
@@ -88,7 +88,7 @@ pub struct Options {
     pub num_lits: u32,
 
     /// Number of statements to generate
-    #[clap(long, action, default_value = "8")]
+    #[clap(long, action, default_value = "1000")]
     pub stmts: u32,
 
     /// Number of local variables to generate
