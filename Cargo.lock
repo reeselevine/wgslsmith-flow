@@ -578,9 +578,31 @@ dependencies = [
  "rand",
  "rand_distr",
  "rpds",
+ "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "data_race_runner"
+version = "0.1.0"
+dependencies = [
+ "ast",
+ "bincode",
+ "byteorder",
+ "clap 3.2.2",
+ "colored",
+ "common",
+ "data_race_generator",
+ "eyre",
+ "harness",
+ "harness-types",
+ "parser",
+ "rand",
+ "reflection",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2491,6 +2513,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "data_race_generator",
+ "data_race_runner",
  "directories",
  "edit",
  "env_logger",

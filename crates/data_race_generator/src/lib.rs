@@ -1,185 +1,440 @@
-mod data_race_gen;
+pub mod cli;
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::hash::BuildHasher;
-use std::io::{self, BufWriter};
-use std::path::Path;
 use std::rc::Rc;
+use crate::cli::Options;
 
-use ast::{StorageClass, VarQualifier, Module};
-use clap::Parser;
-use eyre::{eyre};
-use hashers::fx_hash::FxHasher;
+use serde::{Serialize, Deserialize};
 
-pub use data_race_gen::{Generator, Outputs};
-use rand::prelude::StdRng;
-use rand::rngs::OsRng;
-use rand::{Rng, SeedableRng};
+use ast::types::{DataType, ScalarType, MemoryViewType};
+use ast::{
+    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, FnAttr, FnDecl, GlobalVarAttr,
+    GlobalVarDecl, Module, ShaderStage, Statement, StorageClass, VarQualifier, ExprNode, Lit, 
+    FnInput, FnInputAttr, VarDeclStatement, BinOp, VarExpr, BinOpExpr, Postfix, PostfixExpr, LetDeclStatement
+};
 
-#[derive(Parser)]
-pub struct Options {
-    /// Optional u64 to seed the random generator
-    #[clap(action)]
-    pub seed: Option<u64>,
+use rand::distributions::{WeightedIndex};
+use rand::prelude::{SliceRandom, StdRng};
+use rand::Rng;
+use rand_distr::Distribution;
 
-    /// Print ast instead of WGSL code
-    #[clap(short, long, action)]
-    pub debug: bool,
-
-    /// Logging configuration string (see https://docs.rs/tracing-subscriber/0.3.7/tracing_subscriber/struct.EnvFilter.html#directives)
-    #[clap(long, action)]
-    pub log: Option<String>,
-
-    /// Workgroup size 
-    #[clap(long, action, default_value = "1")]
-    pub workgroup_size: u32,
-
-    /// Percentage of memory locations which can participate in races 
-    #[clap(long, action, default_value = "50")]
-    pub racy_loc_pct: u32,
-
-    /// Percentage of constant memory locations which can participate in races 
-    #[clap(long, action, default_value = "50")]
-    pub racy_constant_loc_pct: u32,
-
-    /// Percentage of local variables which can participate in races 
-    #[clap(long, action, default_value = "50")]
-    pub racy_var_pct: u32,
-
-    /// Number of literals to generate
-    #[clap(long, action, default_value = "4")]
-    pub num_lits: u32,
-
-    /// Number of statements to generate
-    #[clap(long, action, default_value = "8")]
-    pub stmts: u32,
-
-    /// Number of local variables to generate
-    #[clap(long, action, default_value = "8")]
-    pub vars: u32,
-
-    /// Number of memory locations associated with each thread 
-    #[clap(long, action, default_value = "8")]
-    pub locs_per_thread: u32,
-
-    /// Number of constant memory locations
-    #[clap(long, action, default_value = "16")]
-    pub constant_locs: u32,
-
-    /// Path to output file (use `-` for stdout)
-    #[clap(short, long, action, default_value = "-")]
-    pub output: String,
+#[derive(PartialEq, Eq, Copy, Clone)]
+enum AccessType {
+  ThreadSafe,
+  ThreadUnsafe,
+  ThreadRace,
+  ConstantSafe,
+  ConstantUnsafe,
+  VarSafe,
+  VarUnsafe,
+  Literal
 }
 
-#[derive(Clone, Debug)]
-struct BuildFxHasher;
-
-impl BuildHasher for BuildFxHasher {
-    type Hasher = FxHasher;
-
-    fn build_hasher(&self) -> Self::Hasher {
-        FxHasher::default()
-    }
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DataRaceInfo {
+  pub safe: Vec<u32>,
+  pub locs_per_thread: u32,
+  pub safe_constants: Vec<u32>,
+  pub constant_locs: u32
 }
 
-fn output_helper(options: Rc<Options>, source: Module, prefix: &str, rng: &mut StdRng, seed: u64) -> eyre::Result<()> {
-    // Create a writer to file input and prepend "race_<filename>.wgsl"
-    let mut output: Box<dyn io::Write> = if options.output == "-" {
-        Box::new(io::stdout())
-    } else {
-        if let Some(dir) = Path::new(&options.output).parent() {
-            std::fs::create_dir_all(dir)?;
+pub struct Outputs {
+    pub safe: Module,
+    pub race: Module,
+    pub info: DataRaceInfo
+}
+
+pub struct Generator<'a> {
+    rng: &'a mut StdRng,
+    options: Rc<Options>,
+    safe_vars: Vec<String>,
+    racy_vars: Vec<String>,
+    lits: Vec<u32>,
+    safe_offsets: Vec<u32>,
+    racy_offsets: Vec<u32>,
+    safe_constant_locs: Vec<u32>,
+    racy_constant_locs: Vec<u32>,
+    rhs_access_types: Vec<AccessType>,
+    rhs_weights: WeightedIndex<i32>,
+    safe_rhs_access_types: Vec<AccessType>,
+    safe_rhs_weights: WeightedIndex<i32>,
+    lhs_access_types: Vec<AccessType>,
+    lhs_weights: WeightedIndex<i32>
+}
+
+impl<'a> Generator<'a> {
+    pub fn new(rng: &'a mut StdRng, options: Rc<Options>) -> Self {
+
+      let mut lhs_access_types = vec![];
+      let mut rhs_access_types = vec![AccessType::Literal];
+      let mut safe_rhs_access_types = vec![AccessType::Literal];
+
+      let mut lits = vec![];
+      // Create literals used in the program 
+      for i in 0..options.num_lits {
+        lits.push(i);
+      }
+
+      // The first N memory locations are divided into safe (read-only) and racy (read-write)
+      let mut racy_constant_locs = vec![];
+      let mut safe_constant_locs = vec![];
+      for i in 0..options.constant_locs {
+        if Self::rng_less_than(rng, options.racy_constant_loc_pct) {
+          racy_constant_locs.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ConstantUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ConstantUnsafe);
+        } else {
+          safe_constant_locs.push(i);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ConstantSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::ConstantSafe);
         }
-        let out = options.output.rsplit_once('/');
-        let new_path = match out {
-                         Some((a, b)) => a.to_owned() + "/" + prefix + "_" + b,
-                         None => prefix.to_owned() + "_" + &options.output
-                       };
-        Box::new(BufWriter::new(File::create(new_path)?))
-    };
+      }
 
-    if !options.debug {
-        let mut init_data = HashMap::new();
+      // Each thread's memory locations are divided into safe (read-write only by this thread)
+      // and racy (read-write by any thread)
+      let mut racy_offsets = vec![];
+      let mut safe_offsets = vec![];
 
-        for var in &source.vars {
-            if let Some(VarQualifier { storage_class, .. }) = &var.qualifier {
-                if *storage_class != StorageClass::Uniform {
-                    continue;
-                }
+      for i in 0..options.locs_per_thread {
+        if Self::rng_less_than(rng, options.racy_loc_pct) {
+          racy_offsets.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadUnsafe);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadRace);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadRace);
+        } else {
+          safe_offsets.push(i);
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadSafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::ThreadSafe);
+        }
+      }
 
-                let type_desc = common::Type::try_from(&var.data_type).map_err(|e| eyre!(e))?;
+      // local variables are also divided into safe and racy
+      let mut racy_vars = vec![];
+      let mut safe_vars = vec![];
+      for i in 0..options.vars {
+        let name = format!("var_{i}");
+        if Self::rng_less_than(rng, options.racy_var_pct) {
+          racy_vars.push(name.to_owned());
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarUnsafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarUnsafe);
+        } else {
+          safe_vars.push(name.to_owned());
+          Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarSafe);
+          Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarSafe);
+          Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::VarSafe);
+        }
+      }
 
-                let group = var.group_index().unwrap();
-                let binding = var.binding_index().unwrap();
+      let mut lhs_weight_values = vec![];
+      for access_type in &lhs_access_types {
+        lhs_weight_values.push(Self::lhs_access_type_weight(access_type));
+      }
+      let lhs_weights = WeightedIndex::new(lhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
 
-                let size = type_desc.buffer_size();
-                let data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+      let mut rhs_weight_values = vec![];
+      for access_type in &rhs_access_types {
+        rhs_weight_values.push(Self::rhs_access_type_weight(access_type));
+      }
+      let rhs_weights = WeightedIndex::new(rhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
 
-                init_data.insert(format!("{group}:{binding}"), data);
+      let mut safe_rhs_weight_values = vec![];
+      for access_type in &safe_rhs_access_types {
+        safe_rhs_weight_values.push(Self::safe_rhs_access_type_weight(access_type));
+      }
+      let safe_rhs_weights = WeightedIndex::new(safe_rhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
+
+
+      Generator {
+        rng,
+        options: options.clone(),
+        safe_vars, 
+        racy_vars,
+        lits,
+        safe_offsets,
+        racy_offsets,
+        safe_constant_locs,
+        racy_constant_locs,
+        rhs_access_types,
+        rhs_weights,
+        safe_rhs_access_types,
+        safe_rhs_weights,
+        lhs_access_types,
+        lhs_weights
+      }
+    }
+
+    fn add_if_not_exists<T: PartialEq>(vector: &mut Vec<T>, value: T) {
+      if !vector.contains(&value) {
+        vector.push(value);
+      }
+    }
+
+    fn rng_less_than(rng: &mut StdRng, pct: u32) -> bool {
+      return rng.gen_range(0..100) < pct;
+    }
+
+    fn lhs_access_type_weight(access_type: &AccessType) -> i32 {
+      match access_type {
+        AccessType::ThreadSafe => 17,
+        AccessType::ThreadUnsafe => 17,
+        AccessType::ThreadRace => 17,
+        AccessType::ConstantUnsafe => 17,
+        AccessType::VarSafe => 16,
+        AccessType::VarUnsafe => 16,
+        _ => 0
+      }
+    }
+
+    fn rhs_access_type_weight(access_type: &AccessType) -> i32 {
+      match access_type {
+        AccessType::ThreadSafe => 13,
+        AccessType::ThreadUnsafe => 13,
+        AccessType::ThreadRace => 13,
+        AccessType::ConstantSafe => 13,
+        AccessType::ConstantUnsafe => 12,
+        AccessType::VarSafe => 12,
+        AccessType::VarUnsafe => 12,
+        AccessType::Literal => 12
+      }
+    }
+
+    fn safe_rhs_access_type_weight(access_type: &AccessType) -> i32 {
+       match access_type {
+        AccessType::ThreadSafe => 30,
+        AccessType::ConstantSafe => 30,
+        AccessType::VarSafe => 20,
+        AccessType::Literal => 20,
+        _ => 0
+      }
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn gen_module(&mut self) -> Outputs {
+        let global_vars = vec![
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "mem".to_owned(),
+                data_type: DataType::array(ScalarType::U32, None),
+                initializer: None,
             }
+        ];
+
+
+        let mut block: Vec<Statement> = vec![];
+
+        // total ids is the number of workgroups times the workgroup size
+        block.push(LetDeclStatement::new(
+          "total_ids",
+          BinOpExpr::new(
+            BinOp::Times, 
+            VarExpr::new("num_workgroups.x").into_node(DataType::from(ScalarType::U32)), 
+            ExprNode::from(Lit::U32(self.options.workgroup_size)))).into());
+
+        for var in self.safe_vars.to_owned() {
+          block.push(self.initialize_var(var));
         }
 
-        let init_data = serde_json::to_string(&init_data)?;
+        for var in self.racy_vars.to_owned() {
+          block.push(self.initialize_var(var));
+        }
 
-        writeln!(output, "// {init_data}")?;
-        writeln!(output, "// Seed: {seed}")?;
-        writeln!(output)?;
-    }
+        // Make a block to store statements that are safe
+        let mut safe_block: Vec<Statement> = block.clone();
 
-    if options.debug {
-        writeln!(output, "{source:#?}")?;
-    } else {
-        struct Output<'a>(&'a mut dyn std::io::Write);
+        for _i in 0..self.options.stmts {
+          // Return a pair of AccessType + Statement
+          // Then match, if safe add to both modules otherwise only to the race module
+          let (stmt, access_type) = self.gen_statement();
+          if self.safe_rhs_access_types.contains(&access_type) {
+            safe_block.push(stmt.clone());
+          }
+          block.push(stmt);
+        }
 
-        impl<'a> std::fmt::Write for Output<'a> {
-            fn write_str(&mut self, s: &str) -> std::fmt::Result {
-                self.0.write_all(s.as_bytes()).unwrap();
-                Ok(())
+        let mut num_workgroups = FnInput::new("num_workgroups", DataType::Vector(3, ScalarType::U32));
+        num_workgroups.attrs.push(FnInputAttr::Builtin("num_workgroups".to_string()));
+        let mut local_invocation_id = FnInput::new("local_invocation_id", DataType::Vector(3, ScalarType::U32));
+        local_invocation_id.attrs.push(FnInputAttr::Builtin("local_invocation_id".to_string()));
+        let mut workgroup_id = FnInput::new("workgroup_id", DataType::Vector(3, ScalarType::U32));
+        workgroup_id.attrs.push(FnInputAttr::Builtin("workgroup_id".to_string()));
+
+        let entrypoint = FnDecl {
+            attrs: vec![
+                FnAttr::Stage(ShaderStage::Compute),
+                FnAttr::LitWorkgroupSize(self.options.workgroup_size),
+            ],
+            name: "main".to_owned(),
+            inputs: vec![num_workgroups.clone(), workgroup_id.clone(), local_invocation_id.clone()],
+            output: None,
+            body: block,
+        };
+
+        let safe_entrypoint = FnDecl {
+            attrs: vec![
+                FnAttr::Stage(ShaderStage::Compute),
+                FnAttr::LitWorkgroupSize(self.options.workgroup_size),
+            ],
+            name: "main".to_owned(),
+            inputs: vec![num_workgroups, workgroup_id, local_invocation_id],
+            output: None,
+            body: safe_block,
+        };
+
+        let functions = vec![entrypoint];
+        let safe_functions = vec![safe_entrypoint];
+
+        Outputs {
+            safe: Module {
+                    structs: vec![],
+                    consts: vec![], 
+                    vars: global_vars.clone(),
+                    functions: safe_functions
+                },
+            race: Module {
+                    structs: vec![],
+                    consts: vec![],
+                    vars: global_vars.clone(),
+                    functions
+                },
+            info: DataRaceInfo { 
+              safe: self.safe_offsets.clone(), 
+              locs_per_thread: self.options.locs_per_thread, 
+              safe_constants: self.safe_constant_locs.clone(), 
+              constant_locs: self.options.constant_locs
             }
-        }
-
-        ast::writer::Writer::default().write_module(&mut Output(&mut output), &source)?;
+        } 
     }
-    Ok(())
-   
-}
 
-pub fn run(options: Options) -> eyre::Result<()> {
-    let options = Rc::new(options);
+    fn initialize_var(&mut self, name: String) -> Statement {
+      let ty = ScalarType::U32;
+      VarDeclStatement::new(name, Some(ty.into()), None).into()
+    }
 
-    let seed = match options.seed {
-        Some(seed) => seed,
-        None => OsRng.gen(),
-    };
+    fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
+      ExprNode::from(Lit::U32(choices.choose(self.rng).unwrap().to_owned()))
+    }
 
-    tracing::info!("generating shader from seed: {}", seed);
+    fn gen_mem_idx(&mut self, access_type: AccessType) -> ExprNode {
+      let offset = match access_type {
+        AccessType::ThreadSafe => self.safe_offsets.choose(self.rng).unwrap().to_owned(),
+        AccessType::ThreadUnsafe | AccessType::ThreadRace => self.racy_offsets.choose(self.rng).unwrap().to_owned(),
+        _ => 0 //unused
+      };
+      match access_type {
+        AccessType::ConstantSafe => {
+          let choices = self.safe_constant_locs.to_owned();
+          self.constant_expr(choices)
+        },
+        AccessType::ConstantUnsafe => {
+          let choices = self.racy_constant_locs.to_owned();
+          self.constant_expr(choices)
+        },
+        AccessType::ThreadSafe | AccessType::ThreadUnsafe => {
+          let base_id = BinOpExpr::new(
+            BinOp::Times,
+            VarExpr::new("local_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            ExprNode::from(Lit::U32(self.options.locs_per_thread)));
+          BinOpExpr::new(
+            BinOp::Plus,
+            base_id,
+            ExprNode::from(Lit::U32(offset + self.options.constant_locs))).into()
+        },
+        AccessType::ThreadRace => {
+          let new_id = BinOpExpr::new(
+            BinOp::Plus,
+            VarExpr::new("local_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            ExprNode::from(Lit::U32(self.rng.gen_range(1..1024)))); //TODO: magic number
 
-    let mut rng = StdRng::seed_from_u64(seed);
-    let out = Generator::new(&mut rng, options.clone()).gen_module();
-    
-    let safe_shader = out.safe;
-    let race_shader = out.race;
-    let json_info = out.info;
+          let mod_id = BinOpExpr::new(
+            BinOp::Mod,
+            new_id,
+            VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)));
 
-    output_helper(options.clone(), race_shader, "race", &mut rng, seed)?;
-    output_helper(options.clone(), safe_shader, "safe", &mut rng, seed)?;
-
-    let mut output: Box<dyn io::Write> = if options.output == "-" {
-        Box::new(io::stdout())
-    } else {
-        if let Some(dir) = Path::new(&options.output).parent() {
-            std::fs::create_dir_all(dir)?;
+          let base_id = BinOpExpr::new(
+            BinOp::Times,
+            mod_id,
+            ExprNode::from(Lit::U32(self.options.locs_per_thread)));
+          BinOpExpr::new(
+            BinOp::Plus,
+            base_id,
+            ExprNode::from(Lit::U32(offset + self.options.constant_locs))).into()
         }
-        let out = options.output.rsplit_once('/');
-        let new_path = match out {
-                         Some((a, _)) => a.to_owned() + "/info.json",
-                         None => "info.json".to_string()
-                       };
-        Box::new(BufWriter::new(File::create(new_path)?))
-    };
+        _ => unreachable!()
+      }
+    }
 
-    writeln!(output, "{json_info}")?;
+    fn gen_mem_access(&mut self, access_type: AccessType) -> ExprNode {
+      let index = Postfix::index(self.gen_mem_idx(access_type));
+      let arr_expr = VarExpr::new("mem").into_node(
+        DataType::Ref(MemoryViewType::new(
+    DataType::array(ScalarType::U32, None), StorageClass::Storage)));
+      PostfixExpr::new(arr_expr, index).into()
+    }
 
-    Ok(())
+    fn var_expr(&mut self, choices: Vec<String>) -> ExprNode {
+      VarExpr::new(choices.choose(self.rng).unwrap()).into_node(DataType::from(ScalarType::U32))
+    }
+
+    fn gen_op(&mut self, access_type: AccessType) -> ExprNode {
+      match access_type {
+        AccessType::Literal => ExprNode::from(Lit::U32(self.lits.choose(self.rng).unwrap().to_owned())),
+        AccessType::VarSafe => {
+          let choices = self.safe_vars.to_owned();
+          self.var_expr(choices)
+        },
+        AccessType::VarUnsafe => {
+          let choices = self.racy_vars.to_owned();
+          self.var_expr(choices)
+        },
+        _ => self.gen_mem_access(access_type)
+      }
+    }
+
+    fn gen_expr(&mut self, access_type: &AccessType) -> ExprNode {
+      let left_access_type = if self.safe_rhs_access_types.contains(access_type) {
+        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
+      } else {
+        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
+      };
+
+      let right_access_type = if self.safe_rhs_access_types.contains(access_type) {
+        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
+      } else {
+        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
+      };
+
+      BinOpExpr::new(
+        BinOp::Plus, 
+        self.gen_op(left_access_type), 
+        self.gen_op(right_access_type)).into()
+    }
+
+    fn gen_statement(&mut self) -> (Statement, AccessType) {
+      let lhs_access_type: AccessType = self.lhs_access_types[self.lhs_weights.sample(self.rng)];
+      let expr = self.gen_expr(&lhs_access_type.clone());
+      let stmt = match lhs_access_type {
+        AccessType::VarSafe => {
+          let var = self.safe_vars.choose(self.rng).unwrap();
+          AssignmentStatement::new(AssignmentLhs::name(var, DataType::from(ScalarType::U32)), AssignmentOp::Simple, expr).into()
+        }
+        AccessType::VarUnsafe => {
+          let var = self.safe_vars.choose(self.rng).unwrap();
+          AssignmentStatement::new(AssignmentLhs::name(var, DataType::from(ScalarType::U32)), AssignmentOp::Simple, expr).into()
+        }
+        _ => AssignmentStatement::new(
+        AssignmentLhs::array_index(
+          "mem", 
+          DataType::Ref(MemoryViewType::new(
+            DataType::array(ScalarType::U32, None), StorageClass::Storage)),
+            self.gen_mem_idx(lhs_access_type)), 
+        AssignmentOp::Simple,
+        expr).into()
+      };
+      (stmt, lhs_access_type)
+    }
 }

@@ -1,7 +1,7 @@
 use clap::StructOpt;
-use data_race_generator::Options;
+use data_race_generator::cli::{self, Options};
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    data_race_generator::run(Options::parse())
+    cli::run(Options::parse())
 }

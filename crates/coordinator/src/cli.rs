@@ -119,9 +119,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
         fs::create_dir_all(options.target.clone() + &"/".to_owned() + &iteration.to_string())?;
-        let opt = data_race_generator::Options {
+        let opt = data_race_generator::cli::Options {
             seed: options.seed,
-            debug: options.debug,
             log: options.log.clone(),
             workgroup_size: options.workgroup_size,
             racy_loc_pct: options.racy_loc_pct,
@@ -134,7 +133,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             constant_locs: options.constant_locs,
             output: options.target.clone() + &"/".to_owned() + &iteration.to_string() + &"/".to_owned() + &iteration.to_string() + &".wgsl".to_owned()
         };
-        data_race_generator::run(opt)?;
+        data_race_generator::cli::run(opt)?;
 
         let configs = 
         if options.configs.len() == 0 {
