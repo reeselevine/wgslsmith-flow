@@ -32,6 +32,10 @@ pub struct Options {
     #[clap(long, action, default_value = "5")]
     pub repeat: u32,
 
+    /// Number of times for a file to be run per config
+    #[clap(long, action, default_value = "3")]
+    pub config_rep: u32,
+
     /// Optional bool to cause indefinite looping (overrides the repeat option)
     #[clap(short, long, action)]
     pub inf_run: bool,
@@ -145,8 +149,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
         let safe_wgsl = folder_path.clone() + &"safe_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
         let race_wgsl = folder_path.clone() + &"race_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
 
-        let safe_json = folder_path.clone() + &"safe_".to_owned() + &iteration.to_string() + &".json".to_owned();
-        let race_json = folder_path.clone() + &"race_".to_owned() + &iteration.to_string() + &".json".to_owned();
+        let input_json = folder_path.clone() + &"input.json".to_owned();
 
         // Get the size for input
         let input_size = ((options.workgroup_size * options.workgroups * options.locs_per_thread) + options.constant_locs) * 4; // Mult by 4 since u8
@@ -155,26 +158,22 @@ pub fn run(options: Options) -> eyre::Result<()> {
         let mut rng = rand::thread_rng();
         let random_data: Vec<u8> = (0..input_size).map(|_| rng.gen_range(0..u8::MAX)).collect();
 
-        let input_json = json!({
+        let input = json!({
             "0:0": random_data
         });
 
-        let mut safe_data_out: Box<dyn io::Write> = Box::new(BufWriter::new(File::create(safe_json)?));
-        let mut race_data_out: Box<dyn io::Write> = Box::new(BufWriter::new(File::create(race_json)?));
-        println!("{:?}", input_json);
+        let mut input_data_out: Box<dyn io::Write> = Box::new(BufWriter::new(File::create(input_json.clone())?));
 
-        writeln!(safe_data_out, "{input_json}")?;
-        writeln!(race_data_out, "{input_json}")?;
+        writeln!(input_data_out, "{input}")?;
 
-        drop(safe_data_out);
-        drop(race_data_out);
+        drop(input_data_out);
 
         let safe_shader = read_shader_from_path(&safe_wgsl)?;
         let race_shader = read_shader_from_path(&race_wgsl)?;
 
         // In practice I don't think these differ but for consistency we will do this for both
-        let safe_input_data = read_input_data(&safe_wgsl, None)?; // None here to make the default input be used
-        let race_input_data = read_input_data(&race_wgsl, None)?; // For now we will use defaults and later make input data
+        let safe_input_data = read_input_data(&safe_wgsl, Some(&input_json.clone()))?; // None here to make the default input be used
+        let race_input_data = read_input_data(&race_wgsl, Some(&input_json.clone()))?; // For now we will use defaults and later make input data
 
         let (safe_pipeline_desc, _) = reflect_shader(safe_shader.as_str(), safe_input_data);
         let (race_pipeline_desc, _) = reflect_shader(race_shader.as_str(), race_input_data);
@@ -183,43 +182,41 @@ pub fn run(options: Options) -> eyre::Result<()> {
         let info: Info = serde_json::from_reader(File::open(folder_path.clone() + &"info.json".to_owned())?)?;
 
         let mut is_okay = true;
-        let mut bad_configs: Vec<ConfigId> = vec![];
+        let mut error_out: Vec<String> = vec![];
 
         for config in configs {
-            let safe_output = harness::execute_config(&safe_shader, options.workgroups, &safe_pipeline_desc, &config)?;
-            let race_output = harness::execute_config(&race_shader, options.workgroups, &race_pipeline_desc, &config)?;
+            error_out.push("Config: ".to_owned() + &config.to_string() + &"\n\n".to_string());
+            for rep in 0..options.config_rep {
+                error_out.push("Rep: ".to_owned() + &rep.to_string() + &"\n".to_string());
+                let safe_output = harness::execute_config(&safe_shader, options.workgroups, &safe_pipeline_desc, &config)?;
+                let race_output = harness::execute_config(&race_shader, options.workgroups, &race_pipeline_desc, &config)?;
             
-            let safe_array = u8s_to_u32s(&safe_output[0]);
-            let race_array = u8s_to_u32s(&race_output[0]);
+                let safe_array = u8s_to_u32s(&safe_output[0]);
+                let race_array = u8s_to_u32s(&race_output[0]);
             
-            let mut const_check: bool = true;
-            let mut mem_check: bool = true;
-
-            for const_index in info.safe_constants.clone() {
-                let ind: usize = usize::try_from(const_index).unwrap();
-                if safe_array[ind] != race_array[ind] {
-                    const_check = false;
-                    println!("{} has a mismatch in the constant region", ind.to_string().red());
-                }
-            }
-
-            let num_threads = options.workgroups * options.workgroup_size;
-
-            for thread_id in 0..num_threads {
-                for offset in info.safe.clone() {
-                    let ind: usize = usize::try_from(((thread_id * info.locs_per_thread) + offset) + info.constant_locs).unwrap();
+                for const_index in info.safe_constants.clone() {
+                    let ind: usize = usize::try_from(const_index).unwrap();
                     if safe_array[ind] != race_array[ind] {
-                        mem_check = false;
-                        println!("{} has a mismatch in thread {}", ind.to_string().red(), thread_id.to_string().yellow());
+                        is_okay = false;
+                        error_out.push("Constant mismatch: Index ".to_owned() + &ind.to_string() + &" has a mismatch in the constant region.\n".to_string());                        
+                        println!("{} has a mismatch in the constant region", ind.to_string().red());
+                    }
+                }
+
+                let num_threads = options.workgroups * options.workgroup_size;
+
+                for thread_id in 0..num_threads {
+                    for offset in info.safe.clone() {
+                        let ind: usize = usize::try_from(((thread_id * info.locs_per_thread) + offset) + info.constant_locs).unwrap();
+                        if safe_array[ind] != race_array[ind] {
+                            is_okay = false;
+                            error_out.push("Memory mismatch: Index ".to_owned() + &ind.to_string() + &" has a mismatch in thread_id ".to_string() + &thread_id.to_string() + &"\n".to_string());
+                            println!("{} has a mismatch in thread {}", ind.to_string().red(), thread_id.to_string().yellow());
+                        }
                     }
                 }
             }
-
-            if !const_check || !mem_check {
-                // This config leads to an issue
-                bad_configs.push(config);
-                is_okay = false;
-            }
+            error_out.push("\n".to_string());
         }
 
         if is_okay {
@@ -230,7 +227,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             println!("{}", "Configs have a mismatch storing in error.out".red());
             let file = File::create(folder_path + &"/error.out")?;
             let mut writer = BufWriter::new(file);
-            let out: String = bad_configs.into_iter().map(|i| i.to_string() + "\n").collect::<String>();
+            let out: String = error_out.into_iter().map(|i| i).collect::<String>();
 
             writer.write_all(out.as_bytes())?;
         }
