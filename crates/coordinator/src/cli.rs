@@ -1,13 +1,8 @@
-mod utils;
-
 use std::fs::File;
 use std::fs;
-use std::io::Read;
 use std::io::BufWriter;
-use std::path::Path;
-use serde_json::json;
-use serde::Deserialize;
 use colored::Colorize;
+use serde_json::to_string;
 use std::io::Write;
 
 use clap::Parser;
@@ -15,12 +10,10 @@ use clap::Parser;
 use types::ConfigId;
 
 use rand::Rng;
+use rand::rngs::OsRng;
 
-use eyre::{eyre, Context};
-use std::io::{self, Cursor};
-use std::collections::{HashMap, HashSet};
-
-use reflection::PipelineDescription;
+use std::io;
+use std::collections::HashMap;
 
 #[derive(Parser)]
 pub struct Options {
@@ -53,12 +46,6 @@ pub struct Options {
     #[clap(long, action, default_value = "1")]
     pub workgroups: u32,
     
-    // Below are the options for data_race_generator that will be used in each loop
-    // TODO: Check clap to see if there is a better way to lift these options
-    /// Optional u64 to seed the random generator
-    #[clap(action)]
-    pub seed: Option<u64>,
-
     /// Print ast instead of WGSL code
     #[clap(short, long, action)]
     pub debug: bool,
@@ -104,37 +91,26 @@ pub struct Options {
     pub constant_locs: u32
 }
 
-#[derive(Deserialize, Debug)]
-pub struct Info{
-    safe: Vec<u32>,
-    locs_per_thread: u32,
-    safe_constants: Vec<u32>,
-    constant_locs: u32
-}
-
 pub fn run(options: Options) -> eyre::Result<()> {
     // 1) Construct a data race gen Options struct
     let mut iteration: u128 = 0;
 
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
-        fs::create_dir_all(options.target.clone() + &"/".to_owned() + &iteration.to_string())?;
-        let opt = data_race_generator::cli::Options {
-            seed: options.seed,
-            log: options.log.clone(),
-            workgroup_size: options.workgroup_size,
-            racy_loc_pct: options.racy_loc_pct,
-            racy_constant_loc_pct: options.racy_constant_loc_pct,
-            racy_var_pct: options.racy_var_pct,
-            num_lits: options.num_lits,
-            stmts: options.stmts,
-            vars: options.vars,
-            locs_per_thread: options.locs_per_thread,
-            constant_locs: options.constant_locs,
-            output: options.target.clone() + &"/".to_owned() + &iteration.to_string() + &"/".to_owned() + &iteration.to_string() + &".wgsl".to_owned()
+        let gen_opts = data_race_generator::GenOptions {
+          seed: OsRng.gen(),
+          workgroup_size: options.workgroup_size,
+          racy_loc_pct: options.racy_loc_pct,
+          racy_constant_loc_pct: options.racy_constant_loc_pct,
+          racy_var_pct: options.racy_var_pct,
+          num_lits: options.num_lits,
+          stmts: options.stmts,
+          vars: options.vars,
+          locs_per_thread: options.locs_per_thread,
+          constant_locs: options.constant_locs,
         };
-        data_race_generator::cli::run(opt)?;
 
+        let shaders = data_race_generator::gen(gen_opts);
         let configs = 
         if options.configs.len() == 0 {
             // Get defaults for run
@@ -143,193 +119,63 @@ pub fn run(options: Options) -> eyre::Result<()> {
             options.configs.clone()
         };
 
-        let folder_path = options.target.clone() + &"/".to_owned() + &iteration.to_string() + &"/".to_owned();
-
-        let safe_wgsl = folder_path.clone() + &"safe_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
-        let race_wgsl = folder_path.clone() + &"race_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
-
-        let input_json = folder_path.clone() + &"input.json".to_owned();
-
-        // Get the size for input
         let input_size = ((options.workgroup_size * options.workgroups * options.locs_per_thread) + options.constant_locs) * 4; // Mult by 4 since u8
-
-        // Lets randomize the inputs and write the json file for the runs
         let mut rng = rand::thread_rng();
         let random_data: Vec<u8> = (0..input_size).map(|_| rng.gen_range(0..u8::MAX)).collect();
+        let mut input_data = HashMap::new();
+        input_data.insert("0:0".to_owned(), random_data);
 
-        let input = json!({
-            "0:0": random_data
-        });
+        let mut racy_buf = Vec::new();
+        let racy_output: Box<dyn io::Write> = Box::new(&mut racy_buf);
+        ast::writer::Writer::default().write_module_default(racy_output, &shaders.race)?;
+        let racy_shader = String::from_utf8(racy_buf)?;
 
-        let mut input_data_out: Box<dyn io::Write> = Box::new(BufWriter::new(File::create(input_json.clone())?));
+        let mut safe_buf = Vec::new();
+        let safe_output: Box<dyn io::Write> = Box::new(&mut safe_buf);
+        ast::writer::Writer::default().write_module_default(safe_output, &shaders.safe)?;
+        let safe_shader = String::from_utf8(safe_buf)?;
 
-        writeln!(input_data_out, "{input}")?;
+        let exec_options = data_race_runner::ExecOptions {
+          configs,
+          workgroups: options.workgroups,
+          workgroup_size: options.workgroup_size,
+          reps: options.config_rep
+        };
 
-        drop(input_data_out);
+        let mismatches = data_race_runner::execute(racy_shader, safe_shader, &shaders.info, &input_data, exec_options);
 
-        let safe_shader = read_shader_from_path(&safe_wgsl)?;
-        let race_shader = read_shader_from_path(&race_wgsl)?;
-
-        // In practice I don't think these differ but for consistency we will do this for both
-        let safe_input_data = read_input_data(&safe_wgsl, Some(&input_json.clone()))?; // None here to make the default input be used
-        let race_input_data = read_input_data(&race_wgsl, Some(&input_json.clone()))?; // For now we will use defaults and later make input data
-
-        let (safe_pipeline_desc, _) = reflect_shader(safe_shader.as_str(), safe_input_data);
-        let (race_pipeline_desc, _) = reflect_shader(race_shader.as_str(), race_input_data);
-
-        // TODO: Open info.json and extract data to compare in the future wrap as a struct and send it and outputs to a comparator crate for better comparison
-        let info: Info = serde_json::from_reader(File::open(folder_path.clone() + &"info.json".to_owned())?)?;
-
-        let mut is_okay = true;
-        let mut error_out: Vec<String> = vec![];
-
-        for config in configs {
-            error_out.push("Config: ".to_owned() + &config.to_string() + &"\n\n".to_string());
-            for rep in 0..options.config_rep {
-                error_out.push("Rep: ".to_owned() + &rep.to_string() + &"\n".to_string());
-                let safe_output = harness::execute_config(&safe_shader, options.workgroups, &safe_pipeline_desc, &config)?;
-                let race_output = harness::execute_config(&race_shader, options.workgroups, &race_pipeline_desc, &config)?;
-            
-                let safe_array = u8s_to_u32s(&safe_output[0]);
-                let race_array = u8s_to_u32s(&race_output[0]);
-            
-                for const_index in info.safe_constants.clone() {
-                    let ind: usize = usize::try_from(const_index).unwrap();
-                    if safe_array[ind] != race_array[ind] {
-                        is_okay = false;
-                        error_out.push("Constant mismatch: Index ".to_owned() + &ind.to_string() + &" has a mismatch in the constant region.\n".to_string());                        
-                        println!("{} has a mismatch in the constant region", ind.to_string().red());
-                    }
-                }
-
-                let num_threads = options.workgroups * options.workgroup_size;
-
-                for thread_id in 0..num_threads {
-                    for offset in info.safe.clone() {
-                        let ind: usize = usize::try_from(((thread_id * info.locs_per_thread) + offset) + info.constant_locs).unwrap();
-                        if safe_array[ind] != race_array[ind] {
-                            is_okay = false;
-                            error_out.push("Memory mismatch: Index ".to_owned() + &ind.to_string() + &" has a mismatch in thread_id ".to_string() + &thread_id.to_string() + &"\n".to_string());
-                            println!("{} has a mismatch in thread {}", ind.to_string().red(), thread_id.to_string().yellow());
-                        }
-                    }
-                }
-            }
-            error_out.push("\n".to_string());
-        }
-
-        if is_okay {
-            // Cleanup
-            println!("{}", "All configs match".green());
-            fs::remove_dir_all(&folder_path)?;
+        if mismatches.len() == 0 {
+          println!("Iteration {}: {}", iteration, "Configs match".green());
         } else {
-            println!("{}", "Configs have a mismatch storing in error.out".red());
-            let file = File::create(folder_path + &"/error.out")?;
-            let mut writer = BufWriter::new(file);
-            let out: String = error_out.into_iter().map(|i| i).collect::<String>();
+          println!("Iteration {}: {}", iteration, "Configs mismatch".red());
 
-            writer.write_all(out.as_bytes())?;
+          let folder_path = options.target.clone() + &"/".to_owned() + &iteration.to_string();
+          fs::create_dir_all(&folder_path)?;
+
+          let safe_path = folder_path.clone() + &"/safe_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
+          let safe_output = Box::new(BufWriter::new(File::create(safe_path)?));
+          ast::writer::Writer::default().write_module_default(safe_output, &shaders.safe)?;
+
+          let race_path = folder_path.clone() + &"/race_".to_owned() + &iteration.to_string() + &".wgsl".to_owned();
+          let race_output = Box::new(BufWriter::new(File::create(race_path)?));
+          ast::writer::Writer::default().write_module_default(race_output, &shaders.race)?;
+
+          let info_path = folder_path.clone() + &"/info.json".to_owned();
+          let mut info_output = Box::new(BufWriter::new(File::create(info_path)?));
+          writeln!(info_output, "{}", to_string(&shaders.info)?)?;
+
+          let input_path = folder_path.clone() + &"/input.json".to_owned();
+          let mut input_output = Box::new(BufWriter::new(File::create(input_path)?));
+          writeln!(input_output, "{}", to_string(&input_data)?)?;
+
+          let mismatches_path = folder_path.clone() + &"/errors.out".to_owned();
+          let mut mismatches_output = Box::new(BufWriter::new(File::create(mismatches_path)?));
+          for mismatch in mismatches {
+            println!("{:?}", mismatch);
+            writeln!(mismatches_output, "{}", to_string(&mismatch)?)?;
+          }
         }
-            
         iteration+=1;
     }
-        // 2a) update the output field of the Options struct with the loop file name
-
-        // 2b) Run the generator
-
-        // 2c) Generate the json file for input for now just 0s
-
-        // 2d) Grab the harness configuration
-
-        // 2e) Call the comparator crate (for now just put it here)
-
-        // 2f) Do something if mismatch or match
-
-        // 2g) If inf run is set reset the counter var of the loop to keep running
     Ok(())
-}
-
-// Below are harness functions that are copied here for ease of use. Reflect shader may be useful later to check
-// types of the shader pipeline
-
-fn read_shader_from_path(path: &str) -> eyre::Result<String> {
-    let mut input: Box<dyn Read> = match path {
-        "-" => Box::new(std::io::stdin()),
-        path => Box::new(File::open(path)?),
-    };
-
-    let mut shader = String::new();
-    input.read_to_string(&mut shader)?;
-
-    Ok(shader)
-}
-
-fn read_input_data(
-    shader: &str,
-    input_data: Option<&str>,
-) -> eyre::Result<HashMap<String, Vec<u8>>> {
-    match input_data {
-        Some(input_data) => {
-            match serde_json::from_str(input_data)
-                .wrap_err_with(|| eyre!("failed to parse input data"))
-            {
-                Ok(input_data) => Ok(input_data),
-                Err(parse_err) => match File::open(input_data) {
-                    Ok(file) => serde_json::from_reader(file)
-                        .wrap_err_with(|| eyre!("failed to parse input data")),
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => Err(parse_err),
-                    Err(e) => Err(e.into()),
-                },
-            }
-        }
-        None => {
-            if shader != "-" {
-                if let Some(path) = Path::new(shader).parent().map(|it| it.join("inputs.json")){
-                    if path.exists() {
-                        return Ok(serde_json::from_reader(File::open(path)?)?);
-                    }
-                }
-                let path = Path::new(shader).with_extension("json");
-                if path.exists() {
-                    return Ok(serde_json::from_reader(File::open(path)?)?);
-                }
-            }
-            Ok(Default::default())
-        }
-    }
-}
-
-fn reflect_shader(
-    shader: &str,
-    mut input_data: HashMap<String, Vec<u8>>,
-) -> (PipelineDescription, Vec<common::Type>) {
-    let module = parser::parse(shader);
-
-    let (mut pipeline_desc, type_descs) = reflection::reflect(&module, |resource| {
-            input_data.remove(&format!("{}:{}", resource.group, resource.binding))
-    });
-
-    let mut resource_vars = HashSet::new();
-
-    for resource in &pipeline_desc.resources {
-        resource_vars.insert(resource.name.clone());
-    }
-
-    utils::remove_accessed_vars(&mut resource_vars, &module);
-
-    pipeline_desc
-        .resources
-        .retain(|resource| !resource_vars.contains(&resource.name));
-
-    (pipeline_desc, type_descs)
-}
-
-fn u8s_to_u32s(from: &Vec<u8>) -> Vec<u32> {
-    use byteorder::{LittleEndian, ReadBytesExt};
-    let mut rdr = Cursor::new(from);
-    let mut vec32: Vec<u32> = vec![];
-    while let Ok(u) = rdr.read_u32::<LittleEndian>() {
-        vec32.push(u);
-    }
-    vec32
 }

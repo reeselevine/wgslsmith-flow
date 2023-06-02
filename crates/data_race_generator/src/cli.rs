@@ -14,15 +14,13 @@ use rand::prelude::StdRng;
 use rand::rngs::OsRng;
 use rand::{Rng, SeedableRng};
 
+use crate::GenOptions;
+
 #[derive(Parser)]
 pub struct Options {
     /// Optional u64 to seed the random generator
     #[clap(action)]
     pub seed: Option<u64>,
-
-    /// Logging configuration string (see https://docs.rs/tracing-subscriber/0.3.7/tracing_subscriber/struct.EnvFilter.html#directives)
-    #[clap(long, action)]
-    pub log: Option<String>,
 
     /// Workgroup size 
     #[clap(long, action, default_value = "1")]
@@ -94,17 +92,7 @@ fn output_helper(options: Rc<Options>, source: Module, prefix: &str, seed: u64) 
 
     writeln!(output, "// Seed: {seed}")?;
     writeln!(output)?;
-
-    struct Output<'a>(&'a mut dyn std::io::Write);
-
-    impl<'a> std::fmt::Write for Output<'a> {
-      fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.0.write_all(s.as_bytes()).unwrap();
-        Ok(())
-      }
-    }
-
-    ast::writer::Writer::default().write_module(&mut Output(&mut output), &source)?;
+    ast::writer::Writer::default().write_module_default(output, &source)?;
     Ok(())
    
 }
@@ -120,7 +108,19 @@ pub fn run(options: Options) -> eyre::Result<()> {
     tracing::info!("generating shader from seed: {}", seed);
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let out = crate::Generator::new(&mut rng, options.clone()).gen_module();
+    let gen_options = GenOptions {
+      seed,
+      workgroup_size: options.workgroup_size,
+      racy_loc_pct: options.racy_loc_pct,
+      racy_constant_loc_pct: options.racy_constant_loc_pct,
+      racy_var_pct: options.racy_var_pct,
+      num_lits: options.num_lits,
+      stmts: options.stmts,
+      vars: options.vars,
+      locs_per_thread: options.locs_per_thread,
+      constant_locs: options.constant_locs
+    };
+    let out = crate::Generator::new(&mut rng, gen_options).gen_module();
     
     let safe_shader = out.safe;
     let race_shader = out.race;

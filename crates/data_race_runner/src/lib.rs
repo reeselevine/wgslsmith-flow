@@ -1,36 +1,40 @@
 pub mod cli;
 
 use std::{collections::HashMap, io::Cursor};
-use colored::Colorize;
 
 use data_race_generator::DataRaceInfo;
 use reflection::PipelineDescription;
+use serde::Serialize;
 use types::ConfigId;
 
 pub struct ExecOptions {
-  configs: Vec<ConfigId>,
-  workgroups: u32,
-  workgroup_size: u32,
-  reps: u32
+  pub configs: Vec<ConfigId>,
+  pub workgroups: u32,
+  pub workgroup_size: u32,
+  pub reps: u32
+}
+
+#[derive(Debug, Serialize)]
+pub struct Mismatch {
+  pub config: ConfigId,
+  pub rep: u32,
+  // if thread is none than this is a constant location mismatch
+  pub thread: Option<u32>,
+  pub index: u32
 }
 
 pub fn execute(
     racy_shader: String,
     safe_shader: String,
-    data_race_info: DataRaceInfo,
-    input_data: HashMap<String, Vec<u8>>,
+    data_race_info: &DataRaceInfo,
+    input_data: &HashMap<String, Vec<u8>>,
     exec_options: ExecOptions
-) {
+) -> Vec<Mismatch> {
     let safe_pipeline_desc = reflect_shader(safe_shader.as_str(), &input_data);
     let race_pipeline_desc = reflect_shader(racy_shader.as_str(), &input_data);
-
-    let mut is_okay = true;
-    let mut error_out: Vec<String> = vec![];
-
+    let mut mismatches = vec![];
     for config in exec_options.configs {
-        error_out.push("Config: ".to_owned() + &config.to_string() + &"\n\n".to_string());
         for rep in 0..exec_options.reps {
-            error_out.push("Rep: ".to_owned() + &rep.to_string() + &"\n".to_string());
             let safe_output = harness::execute_config(
                 &safe_shader,
                 exec_options.workgroups,
@@ -48,18 +52,9 @@ pub fn execute(
             let race_array = u8s_to_u32s(&race_output[0]);
 
             for const_index in data_race_info.safe_constants.clone() {
-                let ind: usize = usize::try_from(const_index).unwrap();
-                if safe_array[ind] != race_array[ind] {
-                    is_okay = false;
-                    error_out.push(
-                        "Constant mismatch: Index ".to_owned()
-                            + &ind.to_string()
-                            + &" has a mismatch in the constant region.\n".to_string(),
-                    );
-                    println!(
-                        "{} has a mismatch in the constant region",
-                        ind.to_string().red()
-                    );
+                let index: usize = usize::try_from(const_index).unwrap();
+                if safe_array[index] != race_array[index] {
+                    mismatches.push(Mismatch { config: config.clone(), rep, thread: None, index: u32::try_from(index).unwrap()});
                 }
             }
 
@@ -68,35 +63,15 @@ pub fn execute(
             for thread_id in 0..num_threads {
                 for offset in data_race_info.safe.clone() {
                     let ind: usize = usize::try_from(
-                        ((thread_id * data_race_info.locs_per_thread) + offset) + data_race_info.constant_locs,
-                    )
-                    .unwrap();
+                        ((thread_id * data_race_info.locs_per_thread) + offset) + data_race_info.constant_locs).unwrap();
                     if safe_array[ind] != race_array[ind] {
-                        is_okay = false;
-                        error_out.push(
-                            "Memory mismatch: Index ".to_owned()
-                                + &ind.to_string()
-                                + &" has a mismatch in thread_id ".to_string()
-                                + &thread_id.to_string()
-                                + &"\n".to_string(),
-                        );
-                        println!(
-                            "{} has a mismatch in thread {}",
-                            ind.to_string().red(),
-                            thread_id.to_string().yellow()
-                        );
+                        mismatches.push(Mismatch { config: config.clone(), rep, thread: Some(thread_id), index: u32::try_from(ind).unwrap()});
                     }
                 }
             }
         }
-        error_out.push("\n".to_string());
     }
-
-    if is_okay {
-        println!("{}", "All configs match".green());
-    } else {
-        println!("{}", "Configs have a mismatch".red());
-    }
+    mismatches
 }
 
 fn reflect_shader(

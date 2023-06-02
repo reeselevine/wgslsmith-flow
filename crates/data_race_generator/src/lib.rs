@@ -1,8 +1,5 @@
 pub mod cli;
 
-use std::rc::Rc;
-use crate::cli::Options;
-
 use serde::{Serialize, Deserialize};
 
 use ast::types::{DataType, ScalarType, MemoryViewType};
@@ -14,7 +11,7 @@ use ast::{
 
 use rand::distributions::{WeightedIndex};
 use rand::prelude::{SliceRandom, StdRng};
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 
 #[derive(PartialEq, Eq, Copy, Clone)]
@@ -37,15 +34,33 @@ pub struct DataRaceInfo {
   pub constant_locs: u32
 }
 
-pub struct Outputs {
+pub struct Shaders {
     pub safe: Module,
     pub race: Module,
     pub info: DataRaceInfo
 }
 
+pub struct GenOptions {
+  pub seed: u64,
+  pub workgroup_size: u32,
+  pub racy_loc_pct: u32,
+  pub racy_constant_loc_pct: u32,
+  pub racy_var_pct: u32,
+  pub num_lits: u32,
+  pub stmts: u32,
+  pub vars: u32,
+  pub locs_per_thread: u32,
+  pub constant_locs: u32
+}
+
+pub fn gen(options: GenOptions) -> Shaders {
+  let mut rng = StdRng::seed_from_u64(options.seed);
+  Generator::new(&mut rng, options).gen_module()
+}
+
 pub struct Generator<'a> {
     rng: &'a mut StdRng,
-    options: Rc<Options>,
+    options: GenOptions,
     safe_vars: Vec<String>,
     racy_vars: Vec<String>,
     lits: Vec<u32>,
@@ -62,7 +77,7 @@ pub struct Generator<'a> {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(rng: &'a mut StdRng, options: Rc<Options>) -> Self {
+    pub fn new(rng: &'a mut StdRng, options: GenOptions) -> Self {
 
       let mut lhs_access_types = vec![];
       let mut rhs_access_types = vec![AccessType::Literal];
@@ -147,7 +162,7 @@ impl<'a> Generator<'a> {
 
       Generator {
         rng,
-        options: options.clone(),
+        options,
         safe_vars, 
         racy_vars,
         lits,
@@ -210,7 +225,7 @@ impl<'a> Generator<'a> {
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn gen_module(&mut self) -> Outputs {
+    pub fn gen_module(&mut self) -> Shaders {
         let global_vars = vec![
             GlobalVarDecl {
                 attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
@@ -288,7 +303,7 @@ impl<'a> Generator<'a> {
         let functions = vec![entrypoint];
         let safe_functions = vec![safe_entrypoint];
 
-        Outputs {
+        Shaders {
             safe: Module {
                     structs: vec![],
                     consts: vec![], 

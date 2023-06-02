@@ -2,21 +2,22 @@ use std::fmt::{Display, Write};
 use std::str::FromStr;
 
 use bincode::{Decode, Encode};
+use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq, Serialize)]
 pub enum Implementation {
     Dawn,
     Wgpu,
 }
 
-#[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq, Serialize)]
 pub enum BackendType {
     Dx12 = 3,
     Metal = 4,
     Vulkan = 5,
 }
 
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Decode, Encode, Serialize)]
 pub struct ConfigId {
     pub implementation: Implementation,
     pub backend: BackendType,

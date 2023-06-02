@@ -6,7 +6,6 @@ use std::fs::File;
 use std::io::Read;
 use rand::Rng;
 
-
 use eyre::{eyre, Context};
 
 use std::collections::HashMap;
@@ -77,7 +76,10 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
       reps: options.reps
     };
 
-    crate::execute(racy_shader, safe_shader, data_race_info, input_data, exec_options);
+    let result = crate::execute(racy_shader, safe_shader, &data_race_info, &input_data, exec_options);
+    for mismatch in result {
+      println!("{:?}", mismatch);
+    }
     
     Ok(())
 }

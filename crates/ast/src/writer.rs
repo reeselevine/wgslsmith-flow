@@ -1,4 +1,5 @@
 use std::fmt::{Display, Result, Write};
+use std::io;
 
 use indenter::indented;
 
@@ -19,6 +20,19 @@ pub struct Options {
 impl Writer {
     pub fn new(options: Options) -> Writer {
         Writer { options }
+    }
+
+    pub fn write_module_default<'a>(&self, mut output: Box<dyn io::Write + 'a>, module: &Module) -> Result {
+        struct Output<'a>(&'a mut dyn std::io::Write);
+
+        impl<'a> std::fmt::Write for Output<'a> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.write_all(s.as_bytes()).unwrap();
+                Ok(())
+            }
+        }
+
+        self.write_module(&mut Output(&mut output), module)
     }
 
     pub fn write_module(&self, f: &mut dyn Write, module: &Module) -> Result {
@@ -102,9 +116,9 @@ impl Writer {
                     // NOTE: I think Tint now supports this so I changed it (Kyle Little)
                     writeln!(f, "@{stage}")?;
                     //if self.options.concise_stage_attrs {
-                        //writeln!(f, "@{stage}")?;
+                    //writeln!(f, "@{stage}")?;
                     //} else {
-                        //writeln!(f, "@stage({stage})")?;
+                    //writeln!(f, "@stage({stage})")?;
                     //}
                 }
                 _ => self.write_attr(f, attr)?,
@@ -115,7 +129,7 @@ impl Writer {
 
         for (i, param) in func.inputs.iter().enumerate() {
             //for attr in &param.attrs {
-                //write!(f, "@{attr} ")?
+            //write!(f, "@{attr} ")?
             //}
             write!(f, "{param}")?;
             if i != func.inputs.len() - 1 {

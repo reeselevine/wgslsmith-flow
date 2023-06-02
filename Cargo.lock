@@ -419,6 +419,7 @@ dependencies = [
  "colored",
  "common",
  "data_race_generator",
+ "data_race_runner",
  "eyre",
  "harness",
  "harness-types",
@@ -1005,6 +1006,7 @@ name = "harness-types"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "serde",
 ]
 
 [[package]]

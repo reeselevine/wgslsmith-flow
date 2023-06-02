@@ -19,6 +19,8 @@ colored = "2.0.0"
 ast = {path = "../ast" }
 parser = { path = "../parser" }
 data_race_generator = { path = "../data_race_generator" }
+data_race_runner = { path = "../data_race_runner" }
+
 reflection = { path = "../reflection" }
 common = { path = "../common" }
 types = { path = "../harness-types", package = "harness-types" }
