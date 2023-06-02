@@ -20,7 +20,9 @@ pub struct Mismatch {
   pub rep: u32,
   // if thread is none than this is a constant location mismatch
   pub thread: Option<u32>,
-  pub index: u32
+  pub index: u32,
+  pub expected: u32,
+  pub actual: u32
 }
 
 pub fn execute(
@@ -54,7 +56,14 @@ pub fn execute(
             for const_index in data_race_info.safe_constants.clone() {
                 let index: usize = usize::try_from(const_index).unwrap();
                 if safe_array[index] != race_array[index] {
-                    mismatches.push(Mismatch { config: config.clone(), rep, thread: None, index: u32::try_from(index).unwrap()});
+                    mismatches.push(Mismatch {
+                      config: config.clone(), 
+                      rep, 
+                      thread: None, 
+                      index: u32::try_from(index).unwrap(),
+                      expected: safe_array[index],
+                      actual: race_array[index]
+                    });
                 }
             }
 
@@ -65,7 +74,14 @@ pub fn execute(
                     let ind: usize = usize::try_from(
                         ((thread_id * data_race_info.locs_per_thread) + offset) + data_race_info.constant_locs).unwrap();
                     if safe_array[ind] != race_array[ind] {
-                        mismatches.push(Mismatch { config: config.clone(), rep, thread: Some(thread_id), index: u32::try_from(ind).unwrap()});
+                        mismatches.push(Mismatch { 
+                          config: config.clone(), 
+                          rep, 
+                          thread: Some(thread_id), 
+                          index: u32::try_from(ind).unwrap(),
+                          expected: safe_array[ind],
+                          actual: race_array[ind]
+                        });
                     }
                 }
             }

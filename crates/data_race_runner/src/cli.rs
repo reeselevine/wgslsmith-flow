@@ -4,7 +4,6 @@ use types::ConfigId;
 
 use std::fs::File;
 use std::io::Read;
-use rand::Rng;
 
 use eyre::{eyre, Context};
 
@@ -92,8 +91,9 @@ fn get_input_data(input_data: Option<String>, size: u32) -> eyre::Result<HashMap
       Err(e) => Err(e.into()),
     },
     None => {
-      let mut rng = rand::thread_rng();
-      let random_data: Vec<u8> = (0..size).map(|_| rng.gen_range(0..u8::MAX)).collect();
+      // if no input passed, initialize all data to 1
+      let random_data: Vec<u8> = (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect();
+      println!("{:?}", random_data);
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), random_data);
       Ok(map)

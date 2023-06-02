@@ -14,7 +14,7 @@ use rand::prelude::{SliceRandom, StdRng};
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum AccessType {
   ThreadSafe,
   ThreadUnsafe,
@@ -31,7 +31,8 @@ pub struct DataRaceInfo {
   pub safe: Vec<u32>,
   pub locs_per_thread: u32,
   pub safe_constants: Vec<u32>,
-  pub constant_locs: u32
+  pub constant_locs: u32,
+  pub safe_vars: Vec<String>
 }
 
 pub struct Shaders {
@@ -320,14 +321,15 @@ impl<'a> Generator<'a> {
               safe: self.safe_offsets.clone(), 
               locs_per_thread: self.options.locs_per_thread, 
               safe_constants: self.safe_constant_locs.clone(), 
-              constant_locs: self.options.constant_locs
+              constant_locs: self.options.constant_locs,
+              safe_vars: self.safe_vars.clone()
             }
         } 
     }
 
     fn initialize_var(&mut self, name: String) -> Statement {
       let ty = ScalarType::U32;
-      VarDeclStatement::new(name, Some(ty.into()), None).into()
+      VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(0)))).into()
     }
 
     fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
@@ -438,7 +440,7 @@ impl<'a> Generator<'a> {
           AssignmentStatement::new(AssignmentLhs::name(var, DataType::from(ScalarType::U32)), AssignmentOp::Simple, expr).into()
         }
         AccessType::VarUnsafe => {
-          let var = self.safe_vars.choose(self.rng).unwrap();
+          let var = self.racy_vars.choose(self.rng).unwrap();
           AssignmentStatement::new(AssignmentLhs::name(var, DataType::from(ScalarType::U32)), AssignmentOp::Simple, expr).into()
         }
         _ => AssignmentStatement::new(
