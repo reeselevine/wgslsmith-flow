@@ -327,7 +327,7 @@ impl<'a> Generator<'a> {
 
     fn initialize_var(&mut self, name: String) -> Statement {
       let ty = ScalarType::U32;
-      VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(0)))).into()
+      VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(1)))).into()
     }
 
     fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
