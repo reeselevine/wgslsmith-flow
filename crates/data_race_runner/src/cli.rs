@@ -1,6 +1,7 @@
 use clap::Parser;
 use data_race_generator::DataRaceInfo;
 use types::ConfigId;
+use colored::Colorize;
 
 use std::fs::File;
 use std::io::Read;
@@ -76,6 +77,11 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     };
 
     let result = crate::execute(racy_shader, safe_shader, &data_race_info, &input_data, exec_options);
+    if result.len() == 0 {
+        println!("{}", "Configs match".green());
+    } else {
+        println!("{}", "Configs don't match".red());
+    }
     for mismatch in result {
       println!("{:?}", mismatch);
     }
@@ -93,7 +99,6 @@ fn get_input_data(input_data: Option<String>, size: u32) -> eyre::Result<HashMap
     None => {
       // if no input passed, initialize all data to 1
       let random_data: Vec<u8> = (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect();
-      println!("{:?}", random_data);
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), random_data);
       Ok(map)

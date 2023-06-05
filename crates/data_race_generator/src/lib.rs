@@ -274,10 +274,8 @@ impl<'a> Generator<'a> {
 
         let mut num_workgroups = FnInput::new("num_workgroups", DataType::Vector(3, ScalarType::U32));
         num_workgroups.attrs.push(FnInputAttr::Builtin("num_workgroups".to_string()));
-        let mut local_invocation_id = FnInput::new("local_invocation_id", DataType::Vector(3, ScalarType::U32));
-        local_invocation_id.attrs.push(FnInputAttr::Builtin("local_invocation_id".to_string()));
-        let mut workgroup_id = FnInput::new("workgroup_id", DataType::Vector(3, ScalarType::U32));
-        workgroup_id.attrs.push(FnInputAttr::Builtin("workgroup_id".to_string()));
+        let mut global_invocation_id = FnInput::new("global_invocation_id", DataType::Vector(3, ScalarType::U32));
+        global_invocation_id.attrs.push(FnInputAttr::Builtin("global_invocation_id".to_string()));
 
         let entrypoint = FnDecl {
             attrs: vec![
@@ -285,7 +283,7 @@ impl<'a> Generator<'a> {
                 FnAttr::LitWorkgroupSize(self.options.workgroup_size),
             ],
             name: "main".to_owned(),
-            inputs: vec![num_workgroups.clone(), workgroup_id.clone(), local_invocation_id.clone()],
+            inputs: vec![num_workgroups.clone(), global_invocation_id.clone()],
             output: None,
             body: block,
         };
@@ -296,7 +294,7 @@ impl<'a> Generator<'a> {
                 FnAttr::LitWorkgroupSize(self.options.workgroup_size),
             ],
             name: "main".to_owned(),
-            inputs: vec![num_workgroups, workgroup_id, local_invocation_id],
+            inputs: vec![num_workgroups, global_invocation_id],
             output: None,
             body: safe_block,
         };
@@ -354,7 +352,7 @@ impl<'a> Generator<'a> {
         AccessType::ThreadSafe | AccessType::ThreadUnsafe => {
           let base_id = BinOpExpr::new(
             BinOp::Times,
-            VarExpr::new("local_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
             ExprNode::from(Lit::U32(self.options.locs_per_thread)));
           BinOpExpr::new(
             BinOp::Plus,
@@ -364,7 +362,7 @@ impl<'a> Generator<'a> {
         AccessType::ThreadRace => {
           let new_id = BinOpExpr::new(
             BinOp::Plus,
-            VarExpr::new("local_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
             ExprNode::from(Lit::U32(self.rng.gen_range(1..1024)))); //TODO: magic number
 
           let mod_id = BinOpExpr::new(
