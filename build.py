@@ -129,6 +129,13 @@ def dawn_gen_cmake():
                 cmake_args,
                 env,
             )
+        elif build_target == "x86_64-unknown-linux-gnu":
+            cmake_args = [
+                f"-DDAWN_ENABLE_OPENGLES=OFF",
+                f"-DDAWN_ENABLE_DESKTOP_GL=OFF"
+            ]
+            gen_cmake_build(dawn_src_dir, dawn_build_dir, cmake_args)
+
         else:
             gen_cmake_build(dawn_src_dir, dawn_build_dir)
 
