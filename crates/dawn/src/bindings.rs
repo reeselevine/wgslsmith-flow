@@ -96,7 +96,7 @@ impl Device {
                     sType: WGPUSType_WGPUSType_ShaderModuleWGSLDescriptor,
                     ..zeroed()
                 },
-                source: source.as_ptr() as _,
+                code: source.as_ptr() as _,
             };
 
             let descriptor = WGPUShaderModuleDescriptor {
