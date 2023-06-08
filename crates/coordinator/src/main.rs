@@ -1,7 +1,6 @@
-mod cli;
-
 use clap::Parser;
-use cli::Options;
+
+use coordinator::cli::{self, Options};
 
 fn main() -> eyre::Result<()> {
     cli::run(Options::parse())

@@ -5,7 +5,7 @@ use ast::*;
 
 // TODO: Add opts for the thread size for now just pass an int
 
-pub fn thread(mut ast: Module, workg_count: u32, dispatch_size: u32) -> Module {
+pub fn thread(mut ast: Module, workg_count: u32) -> Module {
     let mut dtype = None;
     for gl_var in &ast.vars {
         if gl_var.name == "s_output" { // Target name of output (this is bad but quick to write)
@@ -29,7 +29,7 @@ pub fn thread(mut ast: Module, workg_count: u32, dispatch_size: u32) -> Module {
         .collect::<Vec<_>>();
     // We wont follow the same pattern as the other reconditioning crates since we need
     // thread_count and block count
-    let mut thread = Thread::new(workg_count, dispatch_size, dtype.expect("No type for output"));
+    let mut thread = Thread::new(workg_count, dtype.expect("No type for output"));
     
     // Analyze the functions to change the ending write and the function decorator of main
     ast.functions = ast
@@ -45,15 +45,13 @@ pub fn thread(mut ast: Module, workg_count: u32, dispatch_size: u32) -> Module {
 
 struct Thread {
     workg_count: u32,
-    dispatch_size: u32,
     out_type: DataType,
 }
 
 impl Thread {
-    fn new(workg_count: u32, dispatch_size: u32, t: DataType) -> Thread {
+    fn new(workg_count: u32, t: DataType) -> Thread {
         Thread {
             workg_count: workg_count,
-            dispatch_size: dispatch_size,
             out_type: t,
         }
     }

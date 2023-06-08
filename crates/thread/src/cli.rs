@@ -31,7 +31,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
     // Toss the work to our library, then we write after
     // Not sure if we can change the block size here
-    let result = crate::thread(ast, options.workgroup_count, options.dispatch_size);
+    let result = crate::thread(ast, options.dispatch_size);
 
     struct Output(Box<dyn std::io::Write>);
 

@@ -29,6 +29,7 @@ common = { path = "../common" }
 generator = { path = "../generator" }
 data_race_generator = { path = "../data_race_generator" }
 data_race_runner = { path = "../data_race_runner" }
+coordinator = { path = "../coordinator" }
 harness = { path = "../harness", optional = true }
 harness-frontend = { path = "../harness-frontend" }
 harness-server-types = { path = "../harness-server-types" }

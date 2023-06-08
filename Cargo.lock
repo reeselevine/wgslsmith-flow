@@ -2508,6 +2508,7 @@ dependencies = [
  "clap 3.2.2",
  "color-eyre",
  "common",
+ "coordinator",
  "crossbeam-channel",
  "crossterm",
  "data_race_generator",

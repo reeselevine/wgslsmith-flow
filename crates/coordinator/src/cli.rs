@@ -46,14 +46,6 @@ pub struct Options {
     #[clap(long, action, default_value = "1")]
     pub workgroups: u32,
 
-    /// Print ast instead of WGSL code
-    #[clap(short, long, action)]
-    pub debug: bool,
-
-    /// Logging configuration string (see https://docs.rs/tracing-subscriber/0.3.7/tracing_subscriber/struct.EnvFilter.html#directives)
-    #[clap(long, action)]
-    pub log: Option<String>,
-
     /// Workgroup size
     #[clap(long, action, default_value = "1")]
     pub workgroup_size: u32,

@@ -41,6 +41,8 @@ enum Cmd {
     DataRaceGen(data_race_generator::cli::Options),
     /// Run and compare a shader with data races to a safe one
     DataRaceRunner(data_race_runner::cli::RunOptions),
+    /// Run data race coordinator
+    DataRaceCoordinator(coordinator::cli::Options),
     /// Recondition a shader to add safety checks.
     Recondition(reconditioner::cli::Options),
     /// Add Flow Analysis to a shader.
@@ -112,6 +114,7 @@ fn main() -> eyre::Result<()> {
         Cmd::Gen(options) => generator::run(options),
         Cmd::DataRaceGen(options) => data_race_generator::cli::run(options),
         Cmd::DataRaceRunner(options) => data_race_runner::cli::run(options),
+        Cmd::DataRaceCoordinator(options) => coordinator::cli::run(options),
         Cmd::Recondition(options) => reconditioner::cli::run(options),
         Cmd::Flow(options) => flow::cli::run(options),
         Cmd::UB(options) => ub::cli::run(options),
