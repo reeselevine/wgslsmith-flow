@@ -118,6 +118,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
         } else {
             options.configs.clone()
         };
+        print_configs(&configs);
 
         let input_size = ((options.workgroup_size * options.workgroups * options.locs_per_thread) + options.constant_locs) * 4; // Mult by 4 since u8
         let mut rng = rand::thread_rng();
@@ -179,3 +180,10 @@ pub fn run(options: Options) -> eyre::Result<()> {
     }
     Ok(())
 }
+
+    fn print_configs(configs: &[ConfigId]) {
+      println!("Using configs:");
+      for (_, config) in configs.iter().enumerate() {
+        println!("  {config}");
+      }
+    }
