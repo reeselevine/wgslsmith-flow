@@ -113,8 +113,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
         let shaders = data_race_generator::gen(gen_opts);
         let configs = 
         if options.configs.len() == 0 {
-            // Get defaults for run
-            harness::default_configs()
+            // Default to all configurations
+            harness::query_configs().into_iter().map(|config| config.id).collect()
         } else {
             options.configs.clone()
         };
@@ -181,9 +181,9 @@ pub fn run(options: Options) -> eyre::Result<()> {
     Ok(())
 }
 
-    fn print_configs(configs: &[ConfigId]) {
-      println!("Using configs:");
-      for (_, config) in configs.iter().enumerate() {
-        println!("  {config}");
-      }
-    }
+fn print_configs(configs: &[ConfigId]) {
+  println!("Using configs:");
+  for (_, config) in configs.iter().enumerate() {
+    println!("  {config}");
+  }
+}

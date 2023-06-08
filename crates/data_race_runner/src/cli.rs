@@ -57,11 +57,12 @@ pub struct RunOptions {
 
 pub fn run(options: RunOptions) -> eyre::Result<()> {
     let configs = if options.configs.len() == 0 {
-        // Get defaults for run
-        harness::default_configs()
+        // Default to all configurations
+        harness::query_configs().into_iter().map(|config| config.id).collect()
     } else {
         options.configs.clone()
     };
+    print_configs(&configs);
 
     let safe_shader = read_shader_from_path(&options.safe_shader)?;
     let racy_shader = read_shader_from_path(&options.racy_shader)?;
@@ -116,4 +117,11 @@ fn read_shader_from_path(path: &str) -> eyre::Result<String> {
     input.read_to_string(&mut shader)?;
 
     Ok(shader)
+}
+
+fn print_configs(configs: &[ConfigId]) {
+  println!("Using configs:");
+  for (_, config) in configs.iter().enumerate() {
+    println!("  {config}");
+  }
 }
