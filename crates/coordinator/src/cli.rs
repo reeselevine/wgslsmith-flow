@@ -1,4 +1,5 @@
 use colored::Colorize;
+use data_race_generator::RaceValueStrategy;
 use serde_json::to_string;
 use std::fs;
 use std::fs::File;
@@ -81,6 +82,10 @@ pub struct Options {
     /// Number of constant memory locations
     #[clap(long, action, default_value = "16")]
     pub constant_locs: u32,
+
+    /// Race value strategy
+    #[clap(long, action)]
+    pub race_value_strategy: Option<RaceValueStrategy>,
 }
 
 pub fn run(options: Options) -> eyre::Result<()> {
@@ -111,14 +116,17 @@ pub fn run(options: Options) -> eyre::Result<()> {
             vars: options.vars,
             locs_per_thread: options.locs_per_thread,
             constant_locs: options.constant_locs,
+            race_val_strat: options.race_value_strategy
         };
 
         let shaders = data_race_generator::gen(gen_opts);
         let input_size = ((options.workgroup_size * options.workgroups * options.locs_per_thread)
             + options.constant_locs)
             * 4; // Mult by 4 since u8
-        let mut rng = rand::thread_rng();
-        let random_data: Vec<u8> = (0..input_size).map(|_| rng.gen_range(0..u8::MAX)).collect();
+        let random_data: Vec<u8> = match shaders.info.race_val_strat {
+          Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
+          None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
+        };
         let mut input_data = HashMap::new();
         input_data.insert("0:0".to_owned(), random_data);
 

@@ -2,7 +2,7 @@ pub mod cli;
 
 use std::{collections::HashMap, io::Cursor};
 
-use data_race_generator::DataRaceInfo;
+use data_race_generator::{DataRaceInfo, RaceValueStrategy};
 use reflection::PipelineDescription;
 use serde::Serialize;
 use types::ConfigId;
@@ -15,13 +15,19 @@ pub struct ExecOptions {
 }
 
 #[derive(Debug, Serialize)]
+pub enum Expected {
+  Value(u32),
+  Strategy(RaceValueStrategy)
+}
+
+#[derive(Debug, Serialize)]
 pub struct Mismatch {
   pub config: ConfigId,
   pub rep: u32,
   // if thread is none than this is a constant location mismatch
   pub thread: Option<u32>,
   pub index: u32,
-  pub expected: u32,
+  pub expected: Expected,
   pub actual: u32
 }
 
@@ -61,7 +67,7 @@ pub fn execute(
                       rep, 
                       thread: None, 
                       index: u32::try_from(index).unwrap(),
-                      expected: safe_array[index],
+                      expected: Expected::Value(safe_array[index]),
                       actual: race_array[index]
                     });
                 }
@@ -79,10 +85,32 @@ pub fn execute(
                           rep, 
                           thread: Some(thread_id), 
                           index: u32::try_from(ind).unwrap(),
-                          expected: safe_array[ind],
+                          expected: Expected::Value(safe_array[ind]),
                           actual: race_array[ind]
                         });
                     }
+                }
+                match data_race_info.race_val_strat {
+                  Some(RaceValueStrategy::Even) => {
+                    for offset in 0..data_race_info.locs_per_thread {
+                      if !data_race_info.safe.contains(&offset) {
+                        let ind: usize = usize::try_from(
+                          ((thread_id * data_race_info.locs_per_thread) + offset) + data_race_info.constant_locs).unwrap();
+                        if race_array[ind] % 2 != 0 {
+                          mismatches.push(Mismatch { 
+                            config: config.clone(), 
+                            rep, 
+                            thread: Some(thread_id), 
+                            index: u32::try_from(ind).unwrap(),
+                            expected: Expected::Strategy(RaceValueStrategy::Even),
+                            actual: race_array[ind]
+                          });
+                        }
+                      }
+                    }
+
+                  }
+                  None => {}
                 }
             }
         }

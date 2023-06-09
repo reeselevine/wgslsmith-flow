@@ -1,5 +1,6 @@
 pub mod cli;
 
+use clap::clap_derive::ArgEnum;
 use serde::{Serialize, Deserialize};
 
 use ast::types::{DataType, ScalarType, MemoryViewType};
@@ -26,13 +27,20 @@ enum AccessType {
   Literal
 }
 
+#[derive(Serialize, Deserialize, Debug, ArgEnum, Clone, Copy)]
+#[serde(rename_all = "snake_case")] 
+pub enum RaceValueStrategy {
+  Even
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DataRaceInfo {
   pub safe: Vec<u32>,
   pub locs_per_thread: u32,
   pub safe_constants: Vec<u32>,
   pub constant_locs: u32,
-  pub safe_vars: Vec<String>
+  pub safe_vars: Vec<String>,
+  pub race_val_strat: Option<RaceValueStrategy>
 }
 
 pub struct Shaders {
@@ -51,7 +59,8 @@ pub struct GenOptions {
   pub stmts: u32,
   pub vars: u32,
   pub locs_per_thread: u32,
-  pub constant_locs: u32
+  pub constant_locs: u32,
+  pub race_val_strat: Option<RaceValueStrategy>
 }
 
 pub fn gen(options: GenOptions) -> Shaders {
@@ -87,7 +96,11 @@ impl<'a> Generator<'a> {
       let mut lits = vec![];
       // Create literals used in the program 
       for i in 0..options.num_lits {
-        lits.push(i);
+        let val = match options.race_val_strat {
+          Some(RaceValueStrategy::Even) => i * 2,
+          None => i
+        };
+        lits.push(val);
       }
 
       // The first N memory locations are divided into safe (read-only) and racy (read-write)
@@ -320,14 +333,19 @@ impl<'a> Generator<'a> {
               locs_per_thread: self.options.locs_per_thread, 
               safe_constants: self.safe_constant_locs.clone(), 
               constant_locs: self.options.constant_locs,
-              safe_vars: self.safe_vars.clone()
+              safe_vars: self.safe_vars.clone(),
+              race_val_strat: self.options.race_val_strat
             }
         } 
     }
 
     fn initialize_var(&mut self, name: String) -> Statement {
       let ty = ScalarType::U32;
-      VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(1)))).into()
+      let val = match self.options.race_val_strat {
+        Some(RaceValueStrategy::Even) => 2,
+        None => 1
+      };
+      VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(val)))).into()
     }
 
     fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
@@ -410,23 +428,39 @@ impl<'a> Generator<'a> {
       }
     }
 
+    fn operand_access_ty(&mut self, access_type: &AccessType) -> AccessType {
+      if self.safe_rhs_access_types.contains(access_type) {
+        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
+      } else {
+        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
+      }
+    }
+
     fn gen_expr(&mut self, access_type: &AccessType) -> ExprNode {
-      let left_access_type = if self.safe_rhs_access_types.contains(access_type) {
-        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
+      let operand_weight =  self.rng.gen_range(0..100);
+      // 30% of the time we generate a single operand
+      if operand_weight < 30 {
+        let uni_type = self.operand_access_ty(access_type);
+        self.gen_op(uni_type)
       } else {
-        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
-      };
-
-      let right_access_type = if self.safe_rhs_access_types.contains(access_type) {
-        self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
-      } else {
-        self.rhs_access_types[self.rhs_weights.sample(self.rng)]
-      };
-
-      BinOpExpr::new(
-        BinOp::Plus, 
-        self.gen_op(left_access_type), 
-        self.gen_op(right_access_type)).into()
+        let left_access_type = self.operand_access_ty(access_type);
+        let right_access_type = self.operand_access_ty(access_type);
+        let expr = BinOpExpr::new(
+          BinOp::Plus, 
+          self.gen_op(left_access_type), 
+          self.gen_op(right_access_type));
+        // 60% of the time we generate two operands
+        if operand_weight < 90 {
+          expr.into()
+        // 10% of the time we generate three operands
+        } else {
+          let third_access_type = self.operand_access_ty(access_type);
+          BinOpExpr::new(
+            BinOp::Plus, 
+            expr,
+            self.gen_op(third_access_type)).into()
+        }
+      }
     }
 
     fn gen_statement(&mut self) -> (Statement, AccessType) {

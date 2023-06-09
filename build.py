@@ -13,7 +13,7 @@ def parse_args():
     parser.add_argument("task", nargs="?", default="wgslsmith")
     parser.add_argument("--target")
     parser.add_argument("--install-prefix")
-    parser.add_argument("--no-reducer", action="store_true")
+    parser.add_argument("--reducer", action="store_true")
     parser.add_argument("--no-harness", action="store_true")
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
@@ -148,7 +148,7 @@ def build_tint():
 def build_wgslsmith():
     print(f"> building wgslsmith (target={build_target})")
     features = []
-    if not args.no_reducer:
+    if args.reducer:
         features.append("reducer")
     if not args.no_harness:
         features.append("harness")
@@ -164,11 +164,7 @@ def build_harness():
     print(f"> building harness (target={build_target})")
     cargo_build("harness", target=args.target)
 
-def build_coordinator():
-    print(f"> building coordinator (target={build_target})")
-    cargo_build("coordinator", target=args.target)
-
-if args.task not in {"wgslsmith", "harness", "install", "coordinator"}:
+if args.task not in {"wgslsmith", "harness", "install"}:
     print(f"invalid task: {args.task}")
     exit(1)
 
@@ -197,15 +193,13 @@ tasks = [
 ]
 
 if args.task == "wgslsmith":
-    if not args.no_reducer:
+    if args.reducer:
         tasks += [build_tint]
     if not args.no_harness:
         tasks += [build_dawn]
     tasks += [build_wgslsmith]
 elif args.task == "harness":
     tasks += [build_dawn, build_harness]
-elif args.task == "coordinator":
-    tasks += [build_dawn, build_coordinator]
 
 for task in tasks:
     task()

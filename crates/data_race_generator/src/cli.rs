@@ -14,7 +14,7 @@ use rand::prelude::StdRng;
 use rand::rngs::OsRng;
 use rand::{Rng, SeedableRng};
 
-use crate::GenOptions;
+use crate::{GenOptions, RaceValueStrategy};
 
 #[derive(Parser)]
 pub struct Options {
@@ -25,6 +25,10 @@ pub struct Options {
     /// Workgroup size 
     #[clap(long, action, default_value = "1")]
     pub workgroup_size: u32,
+
+    /// Race value strategy
+    #[clap(long, action)]
+    pub race_value_strategy: Option<RaceValueStrategy>,
 
     /// Percentage of memory locations which can participate in races 
     #[clap(long, action, default_value = "50")]
@@ -118,7 +122,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
       stmts: options.stmts,
       vars: options.vars,
       locs_per_thread: options.locs_per_thread,
-      constant_locs: options.constant_locs
+      constant_locs: options.constant_locs,
+      race_val_strat: options.race_value_strategy
     };
     let out = crate::Generator::new(&mut rng, gen_options).gen_module();
     

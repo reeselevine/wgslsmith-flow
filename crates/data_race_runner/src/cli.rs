@@ -1,5 +1,5 @@
 use clap::Parser;
-use data_race_generator::DataRaceInfo;
+use data_race_generator::{DataRaceInfo, RaceValueStrategy};
 use types::ConfigId;
 use colored::Colorize;
 
@@ -68,7 +68,7 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     let racy_shader = read_shader_from_path(&options.racy_shader)?;
     let data_race_info: DataRaceInfo = serde_json::from_reader(File::open(&options.data_race_info)?)?;
     let input_size = ((options.workgroup_size * options.workgroups * data_race_info.locs_per_thread) + data_race_info.constant_locs) * 4; // Mult by 4 since u8
-    let input_data = get_input_data(options.input_data, input_size)?; 
+    let input_data = get_input_data(options.input_data, &data_race_info, input_size)?; 
 
     let exec_options = ExecOptions {
       configs,
@@ -90,7 +90,7 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     Ok(())
 }
 
-fn get_input_data(input_data: Option<String>, size: u32) -> eyre::Result<HashMap<String, Vec<u8>>> {
+fn get_input_data(input_data: Option<String>, data_race_info: &DataRaceInfo, size: u32) -> eyre::Result<HashMap<String, Vec<u8>>> {
   match input_data {
     Some(input_data) => match File::open(input_data) {
       Ok(file) => serde_json::from_reader(file)
@@ -98,8 +98,11 @@ fn get_input_data(input_data: Option<String>, size: u32) -> eyre::Result<HashMap
       Err(e) => Err(e.into()),
     },
     None => {
-      // if no input passed, initialize all data to 1
-      let random_data: Vec<u8> = (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect();
+      // if no input passed, initialize all data to 1 (2 if using even strategy)
+        let random_data: Vec<u8> = match data_race_info.race_val_strat {
+          Some(RaceValueStrategy::Even) => (0..size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
+          None => (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
+        };
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), random_data);
       Ok(map)
