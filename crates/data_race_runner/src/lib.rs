@@ -74,22 +74,21 @@ pub fn execute(
                             actual: race_array[index],
                         });
                     }
-                } else {
-                    match data_race_info.race_val_strat {
-                        Some(RaceValueStrategy::Even) => {
-                            if race_array[index] % 2 != 0 {
-                                mismatches.push(Mismatch {
-                                    config: config.clone(),
-                                    rep,
-                                    thread: None,
-                                    index: u32::try_from(index).unwrap(),
-                                    expected: Expected::Strategy(RaceValueStrategy::Even),
-                                    actual: race_array[index],
-                                });
-                            }
+                }
+                match data_race_info.race_val_strat {
+                    Some(RaceValueStrategy::Even) => {
+                        if race_array[index] % 2 != 0 {
+                            mismatches.push(Mismatch {
+                                config: config.clone(),
+                                rep,
+                                thread: None,
+                                index: u32::try_from(index).unwrap(),
+                                expected: Expected::Strategy(RaceValueStrategy::Even),
+                                actual: race_array[index],
+                            });
                         }
-                        None => {}
                     }
+                    None => {}
                 }
             }
 
@@ -113,22 +112,21 @@ pub fn execute(
                                 actual: race_array[ind],
                             });
                         }
-                    } else {
-                        match data_race_info.race_val_strat {
-                            Some(RaceValueStrategy::Even) => {
-                                if race_array[ind] % 2 != 0 {
-                                    mismatches.push(Mismatch {
-                                        config: config.clone(),
-                                        rep,
-                                        thread: Some(thread_id),
-                                        index: u32::try_from(ind).unwrap(),
-                                        expected: Expected::Strategy(RaceValueStrategy::Even),
-                                        actual: race_array[ind],
-                                    });
-                                }
+                    }
+                    match data_race_info.race_val_strat {
+                        Some(RaceValueStrategy::Even) => {
+                            if race_array[ind] % 2 != 0 {
+                                mismatches.push(Mismatch {
+                                    config: config.clone(),
+                                    rep,
+                                    thread: Some(thread_id),
+                                    index: u32::try_from(ind).unwrap(),
+                                    expected: Expected::Strategy(RaceValueStrategy::Even),
+                                    actual: race_array[ind],
+                                });
                             }
-                            None => {}
                         }
+                        None => {}
                     }
                 }
             }
