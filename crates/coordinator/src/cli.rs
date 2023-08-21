@@ -52,16 +52,28 @@ pub struct Options {
     pub workgroup_size: u32,
 
     /// Percentage of memory locations which can participate in races
-    #[clap(long, action, default_value = "50")]
+    #[clap(long, action, default_value = "30")]
     pub racy_loc_pct: u32,
 
     /// Percentage of constant memory locations which can participate in races
-    #[clap(long, action, default_value = "50")]
+    #[clap(long, action, default_value = "30")]
     pub racy_constant_loc_pct: u32,
 
     /// Percentage of local variables which can participate in races
-    #[clap(long, action, default_value = "50")]
+    #[clap(long, action, default_value = "30")]
     pub racy_var_pct: u32,
+
+    /// Percentage chance of a statement being a conditional
+    #[clap(long, action, default_value = "10")]
+    pub cond_pct: u32,
+
+    /// Percent chance to break out of a control flow statement
+    #[clap(long, action, default_value = "80")]
+    pub break_chance: u32,
+
+    /// Percent chance to generate an else in an if statement
+    #[clap(long, action, default_value = "30")]
+    pub else_chance: u32,
 
     /// Number of literals to generate
     #[clap(long, action, default_value = "4")]
@@ -111,6 +123,9 @@ pub fn run(options: Options) -> eyre::Result<()> {
             racy_loc_pct: options.racy_loc_pct,
             racy_constant_loc_pct: options.racy_constant_loc_pct,
             racy_var_pct: options.racy_var_pct,
+            cond_pct: options.cond_pct,
+            break_chance: options.break_chance,
+            else_chance: options.else_chance,
             num_lits: options.num_lits,
             stmts: options.stmts,
             vars: options.vars,

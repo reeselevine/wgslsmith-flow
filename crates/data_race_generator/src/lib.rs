@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use ast::types::{DataType, MemoryViewType, ScalarType};
 use ast::{
-    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, ExprNode,
-    FnAttr, FnDecl, FnInput, FnInputAttr, GlobalVarAttr, GlobalVarDecl, LetDeclStatement, Lit,
+    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, Else, ExprNode,
+    FnAttr, FnDecl, FnInput, FnInputAttr, ForLoopInit, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement, Lit,
     Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, VarDeclStatement, VarExpr,
     VarQualifier,
 };
@@ -55,6 +55,9 @@ pub struct GenOptions {
     pub workgroup_size: u32,
     pub racy_loc_pct: u32,
     pub racy_constant_loc_pct: u32,
+    pub cond_pct: u32,
+    pub break_chance: u32,
+    pub else_chance: u32,
     pub racy_var_pct: u32,
     pub num_lits: u32,
     pub stmts: u32,
@@ -85,6 +88,8 @@ pub struct Generator<'a> {
     safe_rhs_weights: WeightedIndex<i32>,
     lhs_access_types: Vec<AccessType>,
     lhs_weights: WeightedIndex<i32>,
+    stmts_complete: u32,
+    //curr_loop_var: u32,
 }
 
 impl<'a> Generator<'a> {
@@ -192,6 +197,8 @@ impl<'a> Generator<'a> {
             safe_rhs_weights,
             lhs_access_types,
             lhs_weights,
+            stmts_complete: 0,
+            //curr_loop_var: 0,
         }
     }
 
@@ -279,14 +286,13 @@ impl<'a> Generator<'a> {
         // Make a block to store statements that are safe
         let mut safe_block: Vec<Statement> = block.clone();
 
-        for _i in 0..self.options.stmts {
-            // Return a pair of AccessType + Statement
-            // Then match, if safe add to both modules otherwise only to the race module
-            let (stmt, access_type) = self.gen_statement();
-            if self.safe_rhs_access_types.contains(&access_type) {
-                safe_block.push(stmt.clone());
+        while self.stmts_complete < self.options.stmts {
+            let (racy_stmt, safe_stmt) = self.gen_statement();
+
+            block.push(racy_stmt.clone());
+            if let Some(safe) = safe_stmt {
+                safe_block.push(safe.clone());
             }
-            block.push(stmt);
         }
 
         let mut num_workgroups =
@@ -460,6 +466,31 @@ impl<'a> Generator<'a> {
         }
     }
 
+    // TODO: Think about for loops more. Its a bit weird and hard to think of a way to limit the number of loops without breaking
+    // the safety of known safe locations
+    /*
+
+    fn gen_for_init(&mut self, access_type: AccessType) -> (ForLoopInit, String) {
+        let ident = format!("i_{}", self.curr_loop_var);
+        let data_type = DataType::Scalar(ScalarType::U32);
+        let expr = self.gen_op(access_type);
+        let var_decl = VarDeclStatement::new(ident, Some(data_type), Some(expr));
+        self.curr_loop_var += 1;
+
+        (ForLoopInit::VarDecl(var_decl), ident)
+    }
+
+    fn gen_for_update(&mut self, ident: String) -> ForLoopUpdate {
+        let lhs = AssignmentLhs::name(ident, DataType::Scalar(ScalarType::U32));
+        let op = AssignmentOp::Simple;
+        let rhs = BinOpExpr::new( // Divide by the limite
+            BinOp::Divide,
+            Expr::Var(VarExpr::new(ident)),
+            Expr::Lit(I32(self.options.loop_limit)),
+        );
+    }
+    */
+
     fn operand_access_ty(&mut self, access_type: &AccessType) -> AccessType {
         if self.safe_rhs_access_types.contains(access_type) {
             self.safe_rhs_access_types[self.safe_rhs_weights.sample(self.rng)]
@@ -493,10 +524,32 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn gen_statement(&mut self) -> (Statement, AccessType) {
+    // Generates two statements one that is a racy variant (the 1st) and the other that is safe (the 2nd)
+    // Rates (TODO: Parameterize these)
+    // 70% to generate an assignment
+    // 15% to generate an if
+    // 15% to generate a loop
+
+    fn gen_statement(&mut self) -> (Statement, Option<Statement>) {
+        // Randomly pick what kind of statement to generate, then return the statement back
+        let decider = self.rng.gen_range(0..100);
+        if decider < 80 {
+            // Gen assign
+            return self.gen_assign(); // This one is fine
+        } else if decider < 90 {
+            // Gen if
+            return self.gen_if();
+        } else {
+            // Gen loop
+            // TODO: Do nothing for now, implement a loop generator
+            return self.gen_if();
+        }
+    }
+
+    fn gen_assign(&mut self) -> (Statement, Option<Statement>) {
         let lhs_access_type: AccessType = self.lhs_access_types[self.lhs_weights.sample(self.rng)];
         let expr = self.gen_expr(&lhs_access_type.clone());
-        let stmt = match lhs_access_type {
+        let stmt: Statement = match lhs_access_type {
             AccessType::VarSafe => {
                 let var = self.safe_vars.choose(self.rng).unwrap();
                 AssignmentStatement::new(
@@ -529,6 +582,79 @@ impl<'a> Generator<'a> {
             )
             .into(),
         };
-        (stmt, lhs_access_type)
+        self.stmts_complete += 1;
+        if self.safe_rhs_access_types.contains(&lhs_access_type) {
+            return (stmt.clone(), Some(stmt)); // Statement is safe do not remove
+        }
+        (stmt, None) // Statement is unsafe remove
+    }
+
+    fn gen_comp_expr(&mut self, access_type: &AccessType) -> ExprNode {
+        let comp_weight = self.rng.gen_range(0..100);
+        let comp_access = self.operand_access_ty(access_type);
+
+        // Comparison will be array[index] (< or >) literal value
+        // 50% of the time generate a >
+        if comp_weight < 50 {
+            BinOpExpr::new(
+                BinOp::Greater,
+                self.gen_op(comp_access),
+                self.gen_op(AccessType::Literal),
+            ).into()     
+        } else {
+            BinOpExpr::new(
+                BinOp::Less,
+                self.gen_op(comp_access),
+                self.gen_op(AccessType::Literal),
+            ).into()
+        }
+    }
+
+    fn gen_if(&mut self) -> (Statement, Option<Statement>) {
+        // Grab an index to compare on from the lhs access types. This will use the same weights as other stmts for the conditional variable
+        // TODO: Unsure if I want to increment statements here since this isnt a computational statement
+        self.stmts_complete += 1;
+        let if_access_type: AccessType = self.lhs_access_types[self.lhs_weights.sample(self.rng)];
+        let comp = self.gen_comp_expr(&if_access_type.clone());
+
+        let mut race_if_stmts: Vec<Statement> = Vec::new();
+        let mut safe_if_stmts: Vec<Statement> = Vec::new();
+        
+        while self.rng.gen_range(0..100) < self.options.break_chance && (self.stmts_complete < self.options.stmts) {
+            // Chance to generate statements if we run out stop
+            let (race, safe) = self.gen_statement();
+            race_if_stmts.push(race.clone()); // Copy the statement into the racy shader
+            if let Some(safe_stmt) = safe { 
+                safe_if_stmts.push(safe_stmt.clone());
+            }
+        }
+        
+        let race_if_stmt = IfStatement::new(comp.clone(), race_if_stmts.clone());
+        let safe_if_stmt = IfStatement::new(comp.clone(), safe_if_stmts.clone());
+        // TODO: Have a chance that the if has an else block. We will return an Option<List<AccessType>> for the else stmts
+        if self.rng.gen_range(0..100) <= self.options.else_chance {
+            let mut race_else_stmts: Vec<Statement> = Vec::new();
+            let mut safe_else_stmts: Vec<Statement> = Vec::new();
+
+            while self.rng.gen_range(0..100) < self.options.break_chance && (self.stmts_complete < self.options.stmts) {
+                // Chance to generate statements if we run out stop
+                let (race, safe) = self.gen_statement();
+                race_else_stmts.push(race.clone());
+                if let Some(safe_stmt) = safe {
+                    safe_else_stmts.push(safe_stmt.clone());
+                }
+            }
+            let race_if_else = race_if_stmt.with_else(Else::Else(race_else_stmts));
+            let safe_if_else = safe_if_stmt.with_else(Else::Else(safe_else_stmts));
+            if self.safe_rhs_access_types.contains(&if_access_type) {
+                return (Statement::If(race_if_else), Some(Statement::If(safe_if_else)));
+            }
+            return (Statement::If(race_if_else), None);
+        }
+        if self.safe_rhs_access_types.contains(&if_access_type) { // TODO: This looks gross
+            return (Statement::If(race_if_stmt), Some(Statement::If(safe_if_stmt)));
+        }
+        (Statement::If(race_if_stmt), None)
     }
 }
+
