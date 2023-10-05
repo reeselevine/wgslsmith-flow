@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "SPIRV-Tools-opt",
         "SPIRV-Tools",
         "tint_diagnostic_utils",
-        "tint",
+        "tint_api",
     ];
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;

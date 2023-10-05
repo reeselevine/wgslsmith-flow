@@ -1,3 +1,4 @@
+#![allow(deprecated)] // don't want to bother with trying to change precclimber to prattparse right now
 use std::hash::Hash;
 use std::rc::Rc;
 

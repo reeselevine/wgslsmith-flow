@@ -96,7 +96,7 @@ impl Device {
                     sType: WGPUSType_WGPUSType_ShaderModuleWGSLDescriptor,
                     ..zeroed()
                 },
-                source: source.as_ptr() as _,
+                code: source.as_ptr() as _,
             };
 
             let descriptor = WGPUShaderModuleDescriptor {
@@ -150,7 +150,7 @@ impl Device {
                     &WGPUBufferDescriptor {
                         label: null(),
                         nextInChain: null(),
-                        mappedAtCreation: mapped,
+                        mappedAtCreation: mapped as _,
                         size: size as _,
                         usage: usage.bits as _,
                     },
