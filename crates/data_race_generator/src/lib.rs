@@ -15,6 +15,7 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
+use std::cmp;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum AccessType {
@@ -55,8 +56,8 @@ pub struct GenOptions {
     pub workgroup_size: u32,
     pub racy_loc_pct: u32,
     pub racy_constant_loc_pct: u32,
-    pub cond_pct: u32,
-    pub break_chance: u32,
+    pub cond_max_stmts: u32,
+    pub cond_max_nest_level: u32,
     pub else_chance: u32,
     pub racy_var_pct: u32,
     pub num_lits: u32,
@@ -88,13 +89,23 @@ pub struct Generator<'a> {
     safe_rhs_weights: WeightedIndex<i32>,
     lhs_access_types: Vec<AccessType>,
     lhs_weights: WeightedIndex<i32>,
-    stmts_complete: u32,
+    racy_lhs_access_types: Vec<AccessType>,
+    racy_lhs_weights: WeightedIndex<i32>,
     //curr_loop_var: u32,
+}
+
+const SAFE_ACCESS_TYPES: [AccessType; 4] = [AccessType::ConstantSafe, AccessType::Literal, AccessType::ThreadSafe, AccessType::VarSafe];
+
+pub struct StatementGenInfo {
+  pub generated_statements: u32,
+  pub statement: Statement,
+  pub safe_statement: Option<Statement>,
 }
 
 impl<'a> Generator<'a> {
     pub fn new(rng: &'a mut StdRng, options: GenOptions) -> Self {
         let mut lhs_access_types = vec![];
+        let mut racy_lhs_access_types = vec![];
         let mut rhs_access_types = vec![AccessType::Literal];
         let mut safe_rhs_access_types = vec![AccessType::Literal];
 
@@ -133,6 +144,8 @@ impl<'a> Generator<'a> {
                 racy_offsets.push(i);
                 Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadUnsafe);
                 Self::add_if_not_exists(&mut lhs_access_types, AccessType::ThreadRace);
+                Self::add_if_not_exists(&mut racy_lhs_access_types, AccessType::ThreadUnsafe);
+                Self::add_if_not_exists(&mut racy_lhs_access_types, AccessType::ThreadRace);
                 Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadUnsafe);
                 Self::add_if_not_exists(&mut rhs_access_types, AccessType::ThreadRace);
             } else {
@@ -151,6 +164,7 @@ impl<'a> Generator<'a> {
             if Self::rng_less_than(rng, options.racy_var_pct) {
                 racy_vars.push(name.to_owned());
                 Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarUnsafe);
+                Self::add_if_not_exists(&mut racy_lhs_access_types, AccessType::VarUnsafe);
                 Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarUnsafe);
             } else {
                 safe_vars.push(name.to_owned());
@@ -166,6 +180,13 @@ impl<'a> Generator<'a> {
         }
         let lhs_weights =
             WeightedIndex::new(lhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
+
+        let mut racy_lhs_weight_values = vec![];
+        for access_type in &racy_lhs_access_types {
+            racy_lhs_weight_values.push(Self::racy_lhs_access_type_weight(access_type));
+        }
+        let racy_lhs_weights =
+            WeightedIndex::new(racy_lhs_weight_values).unwrap_or(WeightedIndex::new(vec![1]).unwrap());
 
         let mut rhs_weight_values = vec![];
         for access_type in &rhs_access_types {
@@ -197,7 +218,8 @@ impl<'a> Generator<'a> {
             safe_rhs_weights,
             lhs_access_types,
             lhs_weights,
-            stmts_complete: 0,
+            racy_lhs_access_types,
+            racy_lhs_weights,
             //curr_loop_var: 0,
         }
     }
@@ -220,6 +242,16 @@ impl<'a> Generator<'a> {
             AccessType::ConstantUnsafe => 17,
             AccessType::VarSafe => 16,
             AccessType::VarUnsafe => 16,
+            _ => 0,
+        }
+    }
+
+    fn racy_lhs_access_type_weight(access_type: &AccessType) -> i32 {
+        match access_type {
+            AccessType::ThreadUnsafe => 25,
+            AccessType::ThreadRace => 25,
+            AccessType::ConstantUnsafe => 25,
+            AccessType::VarUnsafe => 25,
             _ => 0,
         }
     }
@@ -286,13 +318,17 @@ impl<'a> Generator<'a> {
         // Make a block to store statements that are safe
         let mut safe_block: Vec<Statement> = block.clone();
 
-        while self.stmts_complete < self.options.stmts {
-            let (racy_stmt, safe_stmt) = self.gen_statement();
+        let mut stmts_left: u32 = self.options.stmts;
 
-            block.push(racy_stmt.clone());
-            if let Some(safe) = safe_stmt {
-                safe_block.push(safe.clone());
+        while stmts_left > 0 {
+            let gen_info = self.gen_statement(stmts_left, 0, false);
+
+            block.push(gen_info.statement.clone());
+            match gen_info.safe_statement {
+              Some(stmt) => safe_block.push(stmt.clone()),
+              None => {}
             }
+            stmts_left -= gen_info.generated_statements;
         }
 
         let mut num_workgroups =
@@ -526,28 +562,32 @@ impl<'a> Generator<'a> {
 
     // Generates two statements one that is a racy variant (the 1st) and the other that is safe (the 2nd)
     // Rates (TODO: Parameterize these)
-    // 70% to generate an assignment
-    // 15% to generate an if
-    // 15% to generate a loop
+    // 80% to generate an assignment
+    // 10% to generate an if
+    // 10% to generate a loop
 
-    fn gen_statement(&mut self) -> (Statement, Option<Statement>) {
+    fn gen_statement(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
         // Randomly pick what kind of statement to generate, then return the statement back
         let decider = self.rng.gen_range(0..100);
-        if decider < 80 {
+        if decider < 80 || nest_level == self.options.cond_max_nest_level || stmts_left < 2 {
             // Gen assign
-            return self.gen_assign(); // This one is fine
+            return self.gen_assign(racy_block);
         } else if decider < 90 {
             // Gen if
-            return self.gen_if();
+            return self.gen_if(stmts_left, nest_level + 1, racy_block);
         } else {
             // Gen loop
             // TODO: Do nothing for now, implement a loop generator
-            return self.gen_if();
+            return self.gen_if(stmts_left, nest_level + 1, racy_block);
         }
     }
 
-    fn gen_assign(&mut self) -> (Statement, Option<Statement>) {
-        let lhs_access_type: AccessType = self.lhs_access_types[self.lhs_weights.sample(self.rng)];
+    fn gen_assign(&mut self, racy_block: bool) -> StatementGenInfo {
+        let lhs_access_type = if racy_block {
+          self.racy_lhs_access_types[self.racy_lhs_weights.sample(self.rng)]
+        } else {
+          self.lhs_access_types[self.lhs_weights.sample(self.rng)]
+        };
         let expr = self.gen_expr(&lhs_access_type.clone());
         let stmt: Statement = match lhs_access_type {
             AccessType::VarSafe => {
@@ -582,11 +622,16 @@ impl<'a> Generator<'a> {
             )
             .into(),
         };
-        self.stmts_complete += 1;
-        if self.safe_rhs_access_types.contains(&lhs_access_type) {
-            return (stmt.clone(), Some(stmt)); // Statement is safe do not remove
+        let safe_stmt_opt = if SAFE_ACCESS_TYPES.contains(&lhs_access_type) {
+          Some(stmt.clone())
+        } else {
+          None
+        };
+        StatementGenInfo {
+          generated_statements: 1,
+          statement: stmt,
+          safe_statement: safe_stmt_opt
         }
-        (stmt, None) // Statement is unsafe remove
     }
 
     fn gen_comp_expr(&mut self, access_type: &AccessType) -> ExprNode {
@@ -610,51 +655,81 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn gen_if(&mut self) -> (Statement, Option<Statement>) {
+    fn gen_if(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
         // Grab an index to compare on from the lhs access types. This will use the same weights as other stmts for the conditional variable
-        // TODO: Unsure if I want to increment statements here since this isnt a computational statement
-        self.stmts_complete += 1;
-        let if_access_type: AccessType = self.lhs_access_types[self.lhs_weights.sample(self.rng)];
+        let if_access_type: AccessType = if racy_block {
+          self.racy_lhs_access_types[self.racy_lhs_weights.sample(self.rng)]
+        } else {
+          self.lhs_access_types[self.lhs_weights.sample(self.rng)]
+        };
+
+        let cur_block_racy = self.racy_lhs_access_types.contains(&if_access_type);
+
         let comp = self.gen_comp_expr(&if_access_type.clone());
 
         let mut race_if_stmts: Vec<Statement> = Vec::new();
         let mut safe_if_stmts: Vec<Statement> = Vec::new();
-        
-        while self.rng.gen_range(0..100) < self.options.break_chance && (self.stmts_complete < self.options.stmts) {
-            // Chance to generate statements if we run out stop
-            let (race, safe) = self.gen_statement();
-            race_if_stmts.push(race.clone()); // Copy the statement into the racy shader
-            if let Some(safe_stmt) = safe { 
-                safe_if_stmts.push(safe_stmt.clone());
-            }
+
+        // the block contains the minimum of a range of statements or the number of statements left (minus the one statement
+        // used for the block condition)
+        let mut num_statements = cmp::min(self.rng.gen_range(1..self.options.cond_max_stmts), stmts_left - 1);
+        let mut generated_statements = num_statements + 1;
+
+        while num_statements > 0 {
+          let gen_info = self.gen_statement(num_statements, nest_level, cur_block_racy);
+          race_if_stmts.push(gen_info.statement);
+          match gen_info.safe_statement {
+            Some(stmt) => safe_if_stmts.push(stmt),
+            None => {}
+          };
+          num_statements -= gen_info.generated_statements;
         }
         
         let race_if_stmt = IfStatement::new(comp.clone(), race_if_stmts.clone());
         let safe_if_stmt = IfStatement::new(comp.clone(), safe_if_stmts.clone());
-        // TODO: Have a chance that the if has an else block. We will return an Option<List<AccessType>> for the else stmts
-        if self.rng.gen_range(0..100) <= self.options.else_chance {
-            let mut race_else_stmts: Vec<Statement> = Vec::new();
-            let mut safe_else_stmts: Vec<Statement> = Vec::new();
 
-            while self.rng.gen_range(0..100) < self.options.break_chance && (self.stmts_complete < self.options.stmts) {
-                // Chance to generate statements if we run out stop
-                let (race, safe) = self.gen_statement();
-                race_else_stmts.push(race.clone());
-                if let Some(safe_stmt) = safe {
-                    safe_else_stmts.push(safe_stmt.clone());
-                }
-            }
-            let race_if_else = race_if_stmt.with_else(Else::Else(race_else_stmts));
-            let safe_if_else = safe_if_stmt.with_else(Else::Else(safe_else_stmts));
-            if self.safe_rhs_access_types.contains(&if_access_type) {
-                return (Statement::If(race_if_else), Some(Statement::If(safe_if_else)));
-            }
-            return (Statement::If(race_if_else), None);
+        // Have a chance that the if has an else block, if there are enough remaining statements to do so
+        let remaining_stmts = stmts_left - generated_statements;
+        if remaining_stmts > 0 && self.rng.gen_range(0..100) <= self.options.else_chance {
+          let mut race_else_stmts: Vec<Statement> = Vec::new();
+          let mut safe_else_stmts: Vec<Statement> = Vec::new();
+          let mut num_else_statements = cmp::min(self.rng.gen_range(1..self.options.cond_max_stmts), remaining_stmts);
+          generated_statements += num_else_statements;
+
+          while num_else_statements > 0 {
+            let gen_info = self.gen_statement(num_else_statements, nest_level, cur_block_racy);
+            race_else_stmts.push(gen_info.statement);
+            match gen_info.safe_statement {
+              Some(stmt) => safe_else_stmts.push(stmt),
+              None => {}
+            };
+            num_else_statements -= gen_info.generated_statements;
+          }
+
+          let race_if_else = race_if_stmt.with_else(Else::Else(race_else_stmts));
+          let safe_if_else = safe_if_stmt.with_else(Else::Else(safe_else_stmts));
+          let safe_stmt_opt = if cur_block_racy {
+            None
+          } else {
+            Some(Statement::If(safe_if_else))
+          };
+          StatementGenInfo {
+            generated_statements: generated_statements, // statements in each block plus 1 for the if condition
+            statement: Statement::If(race_if_else),
+            safe_statement: safe_stmt_opt
+          }
+        } else {
+          let safe_stmt_opt = if cur_block_racy {
+            None
+          } else {
+            Some(Statement::If(safe_if_stmt))
+          };
+          StatementGenInfo {
+            generated_statements: generated_statements, // statements in the if block plus 1 for the if condition
+            statement: Statement::If(race_if_stmt),
+            safe_statement: safe_stmt_opt
+          }
         }
-        if self.safe_rhs_access_types.contains(&if_access_type) { // TODO: This looks gross
-            return (Statement::If(race_if_stmt), Some(Statement::If(safe_if_stmt)));
-        }
-        (Statement::If(race_if_stmt), None)
     }
 }
 
