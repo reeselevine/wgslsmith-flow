@@ -65,15 +65,19 @@ pub struct Options {
 
     /// Maximum number of statements in a conditional block
     #[clap(long, action, default_value = "100")]
-    pub cond_max_stmts: u32,
+    pub block_max_stmts: u32,
 
     /// Maximum number of nesting of conditionals
     #[clap(long, action, default_value = "3")]
-    pub cond_max_nest_level: u32,
+    pub block_max_nest_level: u32,
 
     /// Percent chance to generate an else in an if statement
     #[clap(long, action, default_value = "30")]
     pub else_chance: u32,
+
+    /// Maximum number of loop iterations
+    #[clap(long, action, default_value = "10")]
+    pub max_loop_iter: u32,
 
     /// Number of literals to generate
     #[clap(long, action, default_value = "4")]
@@ -98,6 +102,11 @@ pub struct Options {
     /// Race value strategy
     #[clap(long, action)]
     pub race_value_strategy: Option<RaceValueStrategy>,
+
+    /// Percentage of time racy statements can go out of bounds
+    #[clap(long, action, default_value = "0")]
+    pub oob_pct: u32,
+
 }
 
 pub fn run(options: Options) -> eyre::Result<()> {
@@ -123,15 +132,17 @@ pub fn run(options: Options) -> eyre::Result<()> {
             racy_loc_pct: options.racy_loc_pct,
             racy_constant_loc_pct: options.racy_constant_loc_pct,
             racy_var_pct: options.racy_var_pct,
-            cond_max_stmts: options.cond_max_stmts,
-            cond_max_nest_level: options.cond_max_nest_level,
+            block_max_stmts: options.block_max_stmts,
+            block_max_nest_level: options.block_max_nest_level,
             else_chance: options.else_chance,
+            max_loop_iter: options.max_loop_iter,
             num_lits: options.num_lits,
             stmts: options.stmts,
             vars: options.vars,
             locs_per_thread: options.locs_per_thread,
             constant_locs: options.constant_locs,
-            race_val_strat: options.race_value_strategy
+            race_val_strat: options.race_value_strategy,
+            oob_pct: options.oob_pct,
         };
 
         let shaders = data_race_generator::gen(gen_opts);
