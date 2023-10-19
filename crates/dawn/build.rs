@@ -25,82 +25,44 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("cargo:rustc-link-search=native={}", dawn_lib_dir.display());
 
-    let common_libs = [
-        "SPIRV-Tools-opt",
-        "SPIRV-Tools",
-        "absl_base",
-        "absl_int128",
-        "absl_log_severity",
-        "absl_raw_logging_internal",
-        "absl_spinlock_wait",
-        "absl_str_format_internal",
-        "absl_string_view",
-        "absl_strings",
-        "absl_strings_internal",
-        "absl_throw_delegate",
-        "dawn_common",
-        "dawn_headers",
-        "dawn_native",
-        "dawn_platform",
-        "dawn_proc",
-        "dawncpp_headers",
-        "tint_api",
-        "tint_api_common",
-        "tint_api_options",
-        "tint_lang_core",
-        "tint_lang_core_constant",
-        "tint_lang_core_intrinsic",
-        "tint_lang_core_ir",
-        "tint_lang_core_type",
-        "tint_lang_hlsl_writer_common",
-        "tint_lang_msl_writer",
-        "tint_lang_msl_writer_ast_printer",
-        "tint_lang_msl_writer_ast_raise",
-        "tint_lang_msl_writer_common",
-        "tint_lang_msl_writer_printer",
-        "tint_lang_msl_writer_raise",
-        "tint_lang_spirv_reader_common",
-        "tint_lang_wgsl",
-        "tint_lang_wgsl_ast",
-        "tint_lang_wgsl_ast_transform",
-        "tint_lang_wgsl_helpers",
-        "tint_lang_wgsl_inspector",
-        "tint_lang_wgsl_intrinsic",
-        "tint_lang_wgsl_ir",
-        "tint_lang_wgsl_program",
-        "tint_lang_wgsl_reader",
-        "tint_lang_wgsl_reader_lower",
-        "tint_lang_wgsl_reader_parser",
-        "tint_lang_wgsl_reader_program_to_ir",
-        "tint_lang_wgsl_resolver",
-        "tint_lang_wgsl_sem",
-        "tint_lang_wgsl_writer",
-        "tint_lang_wgsl_writer_ast_printer",
-        "tint_lang_wgsl_writer_ir_to_program",
-        "tint_lang_wgsl_writer_raise",
-        "tint_lang_wgsl_writer_syntax_tree_printer",
-        "tint_utils_containers",
-        "tint_utils_debug",
-        "tint_utils_diagnostic",
-        "tint_utils_generator",
-        "tint_utils_ice",
-        "tint_utils_id",
-        "tint_utils_macros",
-        "tint_utils_math",
-        "tint_utils_memory",
-        "tint_utils_reflection",
-        "tint_utils_result",
-        "tint_utils_rtti",
-        "tint_utils_strconv",
-        "tint_utils_symbol",
-        "tint_utils_text",
-        "tint_utils_traits",
-    ];
+    let common_libs = ["absl_base", "SPIRV-Tools-opt", "tint_lang_wgsl_helpers", "tint_utils_debug", "absl_int128", "tint_api", "tint_lang_wgsl_inspector", "tint_utils_diagnostic", "absl_log_severity", "tint_api_common", "tint_lang_wgsl_intrinsic", "tint_utils_generator", "absl_raw_logging_internal", "tint_api_options", "tint_lang_wgsl_program", "tint_utils_ice", "absl_spinlock_wait", "tint_lang_core", "tint_lang_wgsl_reader", "tint_utils_id", "absl_str_format_internal", "tint_lang_core_constant", "tint_lang_wgsl_reader_lower", "tint_utils_macros", "absl_strings", "tint_lang_core_intrinsic", "tint_lang_spirv_reader_common", "tint_lang_wgsl_reader_parser", "tint_utils_math", "absl_strings_internal", "tint_lang_core_ir", "tint_lang_wgsl_reader_program_to_ir", "tint_utils_memory", "absl_string_view", "tint_lang_wgsl_resolver", "tint_utils_reflection", "absl_throw_delegate", "tint_lang_core_type", "tint_lang_wgsl_sem", "tint_utils_result", "dawn_common", "tint_lang_hlsl_writer_common", "tint_lang_wgsl_writer", "tint_utils_rtti", "dawncpp_headers", "tint_lang_msl_writer", "tint_lang_wgsl_writer_ast_printer", "tint_utils_strconv", "dawn_headers", "tint_lang_msl_writer_ast_printer", "tint_lang_wgsl_writer_ast_printer", "tint_utils_symbol", "dawn_native", "tint_lang_msl_writer_ast_raise", "tint_lang_wgsl_writer_ir_to_program", "tint_utils_text", "dawn_platform", "tint_lang_msl_writer_common", "tint_lang_wgsl", "tint_lang_wgsl_writer", "tint_utils_traits", "dawn_proc", "tint_lang_msl_writer_printer", "tint_lang_wgsl_ast", "tint_lang_wgsl_writer_syntax_tree_printer", "SPIRV-Tools", "tint_lang_msl_writer_raise", "tint_lang_wgsl_ast_transform", "tint_utils_containers"];
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY")?;
 
     for lib in common_libs {
+        let lib_name = if target_family == "windows" {
+            format!("{lib}.lib")
+        } else if target_family == "unix" {
+            format!("lib{lib}.a")
+        } else {
+            panic!("unsupported target_family '{target_family}'");
+        };
+
+        let path = dawn_lib_dir.join(lib_name);
+
+        if target_os == "linux"
+            && !Command::new("ar")
+                .arg("d")
+                .arg(&path)
+                .arg("Placeholder.cpp.o")
+                .status()?
+                .success()
+        {
+            panic!("ar command failed");
+        }
+
+        println!("cargo:rerun-if-changed={}", path.display());
+        println!("cargo:rustc-link-lib=static={lib}");
+    }
+
+    let platform_libs: &[_] = match target_os.as_str() {
+      "apple" => &["tint_lang_wgsl_ir", "tint_lang_wgsl_writer_raise"],
+      "linux" => &["tint_lang_spirv", "tint_lang_spirv_intrinsic", "tint_lang_spirv_ir", "tint_lang_spirv_reader", "tint_lang_spirv_reader_ast_lower", "tint_lang_spirv_reader_ast_parser", "tint_lang_spirv_type", "tint_lang_core_ir_transform", "tint_lang_spirv_writer", "tint_lang_spirv_writer_ast_printer", "tint_lang_spirv_writer_ast_raise", "tint_lang_spirv_writer_common", "tint_lang_spirv_writer_printer", "tint_lang_spirv_writer_raise"],
+      _ => &[] // add a case here if it's not working
+    };
+
+    for lib in platform_libs {
         let lib_name = if target_family == "windows" {
             format!("{lib}.lib")
         } else if target_family == "unix" {
