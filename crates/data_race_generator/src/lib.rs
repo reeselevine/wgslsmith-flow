@@ -70,14 +70,14 @@ pub struct GenOptions {
     pub oob_pct: u32,
 }
 
-pub fn gen(options: GenOptions) -> Shaders {
+pub fn gen(options: &GenOptions) -> Shaders {
     let mut rng = StdRng::seed_from_u64(options.seed);
-    Generator::new(&mut rng, options).gen_module()
+    Generator::new(&mut rng, &options).gen_module()
 }
 
 pub struct Generator<'a> {
     rng: &'a mut StdRng,
-    options: GenOptions,
+    options: &'a GenOptions,
     safe_vars: Vec<String>,
     racy_vars: Vec<String>,
     lits: Vec<u32>,
@@ -93,7 +93,6 @@ pub struct Generator<'a> {
     lhs_weights: WeightedIndex<i32>,
     racy_lhs_access_types: Vec<AccessType>,
     racy_lhs_weights: WeightedIndex<i32>,
-    //curr_loop_var: u32,
 }
 
 const SAFE_ACCESS_TYPES: [AccessType; 4] = [
@@ -117,7 +116,7 @@ pub struct StatementGenInfo {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(rng: &'a mut StdRng, options: GenOptions) -> Self {
+    pub fn new(rng: &'a mut StdRng, options: &'a GenOptions) -> Self {
         let mut lhs_access_types = vec![];
         let mut racy_lhs_access_types = vec![];
         let mut rhs_access_types = vec![AccessType::Literal];

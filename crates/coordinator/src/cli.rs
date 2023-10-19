@@ -1,5 +1,7 @@
 use colored::Colorize;
+use data_race_generator::GenOptions;
 use data_race_generator::RaceValueStrategy;
+use rand::thread_rng;
 use serde_json::to_string;
 use std::fs;
 use std::fs::File;
@@ -33,6 +35,10 @@ pub struct Options {
     /// Optional bool to cause indefinite looping (overrides the repeat option)
     #[clap(short, long, action)]
     pub inf_run: bool,
+
+    /// Optional bool to generate random options (overrides all other options)
+    #[clap(short, long, action)]
+    pub random_opts: bool,
 
     /// List of configurations to test.
     ///
@@ -107,6 +113,31 @@ pub struct Options {
     #[clap(long, action, default_value = "0")]
     pub oob_pct: u32,
 
+    /// When generating random shaders, whether to disable out of bounds accesses
+    #[clap(long, action)]
+    pub disable_oob: bool,
+}
+
+fn random_opts(disable_oob: bool) -> GenOptions {
+  let mut rng = thread_rng();
+  GenOptions {
+    seed: rng.gen_range(0..=18446744073709551615),
+    workgroup_size: rng.gen_range(1..=128),
+    racy_loc_pct: rng.gen_range(0..=100),
+    racy_constant_loc_pct: rng.gen_range(0..=100),
+    racy_var_pct: rng.gen_range(0..=100),
+    block_max_stmts: rng.gen_range(2..=100),
+    block_max_nest_level: 3,
+    else_chance: rng.gen_range(0..=100),
+    max_loop_iter: 10,
+    num_lits: rng.gen_range(1..=100),
+    stmts: rng.gen_range(0..=1000),
+    vars: rng.gen_range(1..=100),
+    locs_per_thread: rng.gen_range(1..=100),
+    constant_locs: rng.gen_range(1..=100),
+    oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
+    race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) } 
+  } 
 }
 
 pub fn run(options: Options) -> eyre::Result<()> {
@@ -126,7 +157,10 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
-        let gen_opts = data_race_generator::GenOptions {
+        let gen_opts = if options.random_opts {
+          random_opts(options.disable_oob)
+        } else {
+          GenOptions {
             seed: OsRng.gen(),
             workgroup_size: options.workgroup_size,
             racy_loc_pct: options.racy_loc_pct,
@@ -143,11 +177,14 @@ pub fn run(options: Options) -> eyre::Result<()> {
             constant_locs: options.constant_locs,
             race_val_strat: options.race_value_strategy,
             oob_pct: options.oob_pct,
+          }
         };
 
-        let shaders = data_race_generator::gen(gen_opts);
-        let input_size = ((options.workgroup_size * options.workgroups * options.locs_per_thread)
-            + options.constant_locs)
+        let workgroups = if options.random_opts { thread_rng().gen_range(1..=128) } else { options.workgroups };
+
+        let shaders = data_race_generator::gen(&gen_opts);
+        let input_size = ((gen_opts.workgroup_size * workgroups * gen_opts.locs_per_thread)
+            + gen_opts.constant_locs)
             * 4; // Mult by 4 since u8
         let random_data: Vec<u8> = match shaders.info.race_val_strat {
           Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
@@ -168,8 +205,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
         let exec_options = data_race_runner::ExecOptions {
             configs: configs.clone(),
-            workgroups: options.workgroups,
-            workgroup_size: options.workgroup_size,
+            workgroups: workgroups,
+            workgroup_size: gen_opts.workgroup_size,
             reps: options.config_rep,
         };
 

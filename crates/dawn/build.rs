@@ -95,6 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "tint_lang_msl_writer_raise",
         "tint_lang_wgsl_ast_transform",
         "tint_utils_containers",
+        "tint_lang_wgsl_ir",
     ];
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
@@ -128,7 +129,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let platform_libs: &[_] = match target_os.as_str() {
         "linux" => &[
-            "tint_lang_wgsl_ir",
             "tint_lang_wgsl_writer_raise",
             "tint_lang_spirv",
             "tint_lang_spirv_intrinsic",

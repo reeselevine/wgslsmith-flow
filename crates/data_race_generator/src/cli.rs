@@ -150,7 +150,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
       race_val_strat: options.race_value_strategy,
       oob_pct: options.oob_pct,
     };
-    let out = crate::Generator::new(&mut rng, gen_options).gen_module();
+    let out = crate::Generator::new(&mut rng, &gen_options).gen_module();
     
     let safe_shader = out.safe;
     let race_shader = out.race;
