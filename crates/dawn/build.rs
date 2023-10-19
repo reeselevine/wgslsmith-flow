@@ -57,8 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let platform_libs: &[_] = match target_os.as_str() {
-      "apple" => &["tint_lang_wgsl_ir", "tint_lang_wgsl_writer_raise"],
-      "linux" => &["tint_lang_spirv", "tint_lang_spirv_intrinsic", "tint_lang_spirv_ir", "tint_lang_spirv_reader", "tint_lang_spirv_reader_ast_lower", "tint_lang_spirv_reader_ast_parser", "tint_lang_spirv_type", "tint_lang_core_ir_transform", "tint_lang_spirv_writer", "tint_lang_spirv_writer_ast_printer", "tint_lang_spirv_writer_ast_raise", "tint_lang_spirv_writer_common", "tint_lang_spirv_writer_printer", "tint_lang_spirv_writer_raise"],
+      "linux" => &["tint_lang_wgsl_ir", "tint_lang_wgsl_writer_raise", "tint_lang_spirv", "tint_lang_spirv_intrinsic", "tint_lang_spirv_ir", "tint_lang_spirv_reader", "tint_lang_spirv_reader_ast_lower", "tint_lang_spirv_reader_ast_parser", "tint_lang_spirv_type", "tint_lang_core_ir_transform", "tint_lang_spirv_writer", "tint_lang_spirv_writer_ast_printer", "tint_lang_spirv_writer_ast_raise", "tint_lang_spirv_writer_common", "tint_lang_spirv_writer_printer", "tint_lang_spirv_writer_raise"],
       _ => &[] // add a case here if it's not working
     };
 
