@@ -130,11 +130,11 @@ fn random_opts(disable_oob: bool) -> GenOptions {
     block_max_nest_level: 3,
     else_chance: rng.gen_range(0..=100),
     max_loop_iter: 10,
-    num_lits: rng.gen_range(1..=100),
+    num_lits: rng.gen_range(1..=16),
     stmts: rng.gen_range(0..=1000),
-    vars: rng.gen_range(1..=100),
-    locs_per_thread: rng.gen_range(1..=100),
-    constant_locs: rng.gen_range(1..=100),
+    vars: rng.gen_range(1..=16),
+    locs_per_thread: rng.gen_range(1..=16),
+    constant_locs: rng.gen_range(1..=16),
     oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
     race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) } 
   } 
