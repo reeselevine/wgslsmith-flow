@@ -20,6 +20,7 @@ ast = { path = "../ast" }
 flow = {path = "../flow"}
 parser = { path = "../parser" }
 reflection = { path = "../reflection" }
+reflection-types = { path = "../reflection-types"}
 common = { path = "../common" }
 types = {path = "../harness-types", package = "harness-types" }
 harness = { path = "../harness" }

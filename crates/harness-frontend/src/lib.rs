@@ -9,6 +9,7 @@ use std::{fmt, io};
 
 use eyre::{eyre, Context};
 use reflection::PipelineDescription;
+use reflection_types::BufferInitInfo;
 
 pub use printer::{ExecutionEvent, ExecutionResult, Printer};
 
@@ -17,7 +18,7 @@ use types::ConfigId;
 pub fn read_input_data(
     shader: &str,
     input_data: Option<&str>,
-) -> eyre::Result<HashMap<String, Vec<u8>>> {
+) -> eyre::Result<HashMap<String, BufferInitInfo>> {
     match input_data {
         Some(input_data) => {
             // Try parsing value as json string
@@ -76,7 +77,7 @@ pub fn read_shader_from_path(path: &str) -> eyre::Result<String> {
 
 pub fn reflect_shader(
     shader: &str,
-    mut input_data: HashMap<String, Vec<u8>>,
+    mut input_data: HashMap<String, BufferInitInfo>,
 ) -> (PipelineDescription, Vec<common::Type>) {
     let module = parser::parse(shader);
 

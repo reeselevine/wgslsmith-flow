@@ -2,6 +2,7 @@ use colored::Colorize;
 use data_race_generator::GenOptions;
 use data_race_generator::RaceValueStrategy;
 use rand::thread_rng;
+use reflection_types::BufferInitInfo;
 use serde_json::to_string;
 use std::fs;
 use std::fs::File;
@@ -97,6 +98,10 @@ pub struct Options {
     #[clap(long, action, default_value = "8")]
     pub vars: u32,
 
+    /// Number of uninitialized local variables to generate
+    #[clap(long, action, default_value = "8")]
+    pub uninit_vars: u32,
+
     /// Number of memory locations associated with each thread
     #[clap(long, action, default_value = "8")]
     pub locs_per_thread: u32,
@@ -133,6 +138,7 @@ fn random_opts(disable_oob: bool) -> GenOptions {
     num_lits: rng.gen_range(1..=16),
     stmts: rng.gen_range(0..=1000),
     vars: rng.gen_range(1..=16),
+    uninit_vars: rng.gen_range(1..=16),
     locs_per_thread: rng.gen_range(1..=16),
     constant_locs: rng.gen_range(1..=16),
     oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
@@ -173,6 +179,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             num_lits: options.num_lits,
             stmts: options.stmts,
             vars: options.vars,
+            uninit_vars: options.uninit_vars,
             locs_per_thread: options.locs_per_thread,
             constant_locs: options.constant_locs,
             race_val_strat: options.race_value_strategy,
@@ -190,8 +197,9 @@ pub fn run(options: Options) -> eyre::Result<()> {
           Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
           None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
         };
-        let mut input_data = HashMap::new();
-        input_data.insert("0:0".to_owned(), random_data);
+        let mut input_info = HashMap::new();
+        input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
+        input_info.insert("0:1".to_owned(), BufferInitInfo::Size { size: gen_opts.workgroup_size * workgroups * gen_opts.uninit_vars * 4}); // size is in u8 (bytes)
 
         let mut racy_buf = Vec::new();
         let racy_output: Box<dyn io::Write> = Box::new(&mut racy_buf);
@@ -214,7 +222,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             racy_shader,
             safe_shader,
             &shaders.info,
-            &input_data,
+            &input_info,
             exec_options,
         );
 
@@ -246,7 +254,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
             let input_path = folder_path.clone() + &"/input.json".to_owned();
             let mut input_output = Box::new(BufWriter::new(File::create(input_path)?));
-            writeln!(input_output, "{}", to_string(&input_data)?)?;
+            writeln!(input_output, "{}", to_string(&input_info)?)?;
 
             let mismatches_path = folder_path.clone() + &"/errors.out".to_owned();
             let mut mismatches_output = Box::new(BufWriter::new(File::create(mismatches_path)?));

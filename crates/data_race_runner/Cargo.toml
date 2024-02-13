@@ -18,6 +18,7 @@ ast = {path = "../ast" }
 parser = { path = "../parser" }
 data_race_generator = { path = "../data_race_generator" }
 reflection = { path = "../reflection" }
+reflection-types = { path = "../reflection-types" }
 common = { path = "../common" }
 types = { path = "../harness-types", package = "harness-types" }
 harness = { path = "../harness" }

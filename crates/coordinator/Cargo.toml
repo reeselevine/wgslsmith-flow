@@ -22,6 +22,8 @@ data_race_generator = { path = "../data_race_generator" }
 data_race_runner = { path = "../data_race_runner" }
 
 reflection = { path = "../reflection" }
+reflection-types = { path = "../reflection-types" }
+
 common = { path = "../common" }
 types = { path = "../harness-types", package = "harness-types" }
 harness = { path = "../harness" }
