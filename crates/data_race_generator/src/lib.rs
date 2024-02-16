@@ -295,13 +295,44 @@ impl<'a> Generator<'a> {
 
     #[tracing::instrument(skip(self))]
     pub fn gen_module(&mut self) -> Shaders {
-        let global_vars = vec![GlobalVarDecl {
+        let global_vars = vec![
+        GlobalVarDecl {
             attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
             qualifier: Some(VarQualifier {
                 storage_class: StorageClass::Storage,
                 access_mode: Some(AccessMode::ReadWrite),
             }),
             name: "mem".to_owned(),
+            data_type: DataType::array(ScalarType::U32, None),
+            initializer: None,
+        },
+        GlobalVarDecl {
+            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(1)],
+            qualifier: Some(VarQualifier {
+                storage_class: StorageClass::Storage,
+                access_mode: Some(AccessMode::ReadWrite),
+            }),
+            name: "index_buf".to_owned(),
+            data_type: DataType::array(ScalarType::U32, None),
+            initializer: None,
+        },
+        GlobalVarDecl {
+            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(2)],
+            qualifier: Some(VarQualifier {
+                storage_class: StorageClass::Storage,
+                access_mode: Some(AccessMode::ReadWrite),
+            }),
+            name: "data_buf".to_owned(),
+            data_type: DataType::array(ScalarType::U32, None),
+            initializer: None,
+        },
+        GlobalVarDecl {
+            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(3)],
+            qualifier: Some(VarQualifier {
+                storage_class: StorageClass::Storage,
+                access_mode: Some(AccessMode::ReadWrite),
+            }),
+            name: "output_buf".to_owned(),
             data_type: DataType::array(ScalarType::U32, None),
             initializer: None,
         }];
@@ -576,10 +607,13 @@ impl<'a> Generator<'a> {
         } else if decider < 90 {
             // Gen if
             return self.gen_if(stmts_left, nest_level + 1, racy_block);
-        } else {
+        } else if decider < 98 {
             // Gen loop
             return self.gen_for(stmts_left, nest_level + 1, racy_block);
+        } else {
+            return self.gen_pattern(stmts_left, nest_level + 1, racy_block)
         }
+
     }
 
     fn gen_assign(&mut self, racy_block: bool) -> StatementGenInfo {
@@ -662,7 +696,7 @@ impl<'a> Generator<'a> {
 
     fn gen_if(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
         // Access types in the if comparison can be racy or non-racy, since no writes occur
-        let first_if_access_type = self.rhs_access_types[self.rhs_weights.sample(self.rng)];
+        let first_if_access_type: AccessType = self.rhs_access_types[self.rhs_weights.sample(self.rng)];
 
         let cur_block_racy = racy_block || RACY_ACCESS_TYPES.contains(&first_if_access_type);
 
@@ -819,5 +853,133 @@ impl<'a> Generator<'a> {
             statement: Statement::ForLoop(race_for_stmt),
             safe_statement: safe_stmt_opt,
         }
+    }
+
+    /*
+        index_buf[local_id] = some_low_number(thread_id) // sometimes, optional, many times
+
+        // sometimes it could be this too, where NUM_THREADS is the size of the array. This way the compiler can’t make everything 0 (like it could above), but it could still try to remove the bounds check.
+        index_buf[local_id] = min(index_buf[local_id]], NUM_THREADS); 
+
+        If (index_buf[local_id]] < 50) {
+        ... <- have to be racy
+            output_buf[local_id]] = data_buf[index_buf[local_id]];
+        ...<- have to be racy
+        }
+        ...<- could be safe/racy
+        index_buf[shuffled_id(local_id))] = 10001; // idea for shuffle: (thread_id + SOME_NUM) % NUM_THREADS (some big number) 
+     */
+    fn gen_pattern(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
+        if stmts_left < 6 {
+            return self.gen_statement(stmts_left, nest_level, racy_block);
+        }
+
+        MemoryViewType::new(
+            DataType::array(ScalarType::U32, None),
+            StorageClass::Storage,
+        );
+        // Index assignment 
+        let assign = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "index_buf",
+                DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            ),
+            AssignmentOp::Simple,
+            Lit::U32(0),
+        );
+
+        /*let if_condition = ExprNode {
+            data_type: todo!(),
+            expr: todo!(),
+        };*/
+
+        let index = Postfix::index(VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)));
+        let arr_expr = VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+            DataType::array(ScalarType::U32, None),
+            StorageClass::Storage,
+        )));
+        let first: ExprNode = PostfixExpr::new(arr_expr, index).into();
+
+        let arr_expr2 = VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
+            DataType::array(ScalarType::U32, None),
+            StorageClass::Storage,
+        )));
+
+        let second: ExprNode = PostfixExpr::new(arr_expr2, Postfix::index(first.clone())).into();
+
+        let mut statements: Vec<Statement> = vec![assign.into()];
+        let array_cast = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "output_buf",
+                DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            ),
+            AssignmentOp::Simple,
+            second
+        );
+
+        let mut if_body = vec![];
+        for _ in 1..10 {
+            if_body.push(self.gen_statement(20, nest_level, true).statement)
+        }
+        if_body.push(array_cast.into());
+
+        let if_statement = IfStatement::new(
+            BinOpExpr::new(
+                BinOp::Less,
+                first,
+                Lit::U32(50)
+            ), 
+            if_body
+        );
+        
+        //race_if_stmts.push(Statement::If(if_statement));
+
+        // Handover hand 
+        let assign2 = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "index_buf",
+                DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                BinOpExpr::new(
+                    BinOp::Mod, 
+                    BinOpExpr::new(
+                        BinOp::Plus,
+                        VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                        Lit::U32(283)
+                    ), 
+                    VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32))
+            ).into()
+                
+            ),
+            AssignmentOp::Simple,
+            Lit::U32(self.rng.gen_range(self.options.workgroup_size*64..self.options.workgroup_size * 640)),
+        );
+
+        for _ in 1..10 {
+            statements.push(self.gen_statement(20, nest_level, true).statement);
+        }
+        statements.push(if_statement.into());
+        for _ in 1..10 {
+            statements.push(self.gen_statement(20, nest_level, true).statement);
+        }
+
+        statements.push(assign2.into());
+
+        StatementGenInfo {
+            generated_statements: 3, // statements in the if block plus 1 for the if condition
+            statement: statements.into(),
+            safe_statement: None,
+        }
+    
     }
 }
