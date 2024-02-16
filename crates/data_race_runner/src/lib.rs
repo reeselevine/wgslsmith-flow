@@ -4,6 +4,7 @@ use std::{collections::HashMap, io::Cursor};
 
 use data_race_generator::{DataRaceInfo, RaceValueStrategy};
 use reflection::PipelineDescription;
+use reflection_types::BufferInitInfo;
 use serde::Serialize;
 use types::ConfigId;
 
@@ -21,10 +22,17 @@ pub enum Expected {
 }
 
 #[derive(Debug, Serialize)]
+pub enum MismatchType {
+  ConstantLocation,
+  SafeLocation,
+  UninitializedVar
+}
+
+#[derive(Debug, Serialize)]
 pub struct Mismatch {
     pub config: ConfigId,
     pub rep: u32,
-    // if thread is none than this is a constant location mismatch
+    pub mismatch_type: MismatchType,
     pub thread: Option<u32>,
     pub index: u32,
     pub expected: Expected,
@@ -35,7 +43,7 @@ pub fn execute(
     racy_shader: String,
     safe_shader: String,
     data_race_info: &DataRaceInfo,
-    input_data: &HashMap<String, Vec<u8>>,
+    input_data: &HashMap<String, BufferInitInfo>,
     exec_options: ExecOptions,
 ) -> Vec<Mismatch> {
     let safe_pipeline_desc = reflect_shader(safe_shader.as_str(), &input_data);
@@ -61,6 +69,9 @@ pub fn execute(
             let safe_array = u8s_to_u32s(&safe_output[0]);
             let race_array = u8s_to_u32s(&race_output[0]);
 
+            let safe_uninit_array = u8s_to_u32s(&safe_output[1]);
+            let race_uninit_array = u8s_to_u32s(&race_output[1]);
+
             for const_index in 0..data_race_info.constant_locs {
                 let index: usize = usize::try_from(const_index).unwrap();
                 if data_race_info.safe_constants.contains(&const_index) {
@@ -68,6 +79,7 @@ pub fn execute(
                         mismatches.push(Mismatch {
                             config: config.clone(),
                             rep,
+                            mismatch_type: MismatchType::ConstantLocation,
                             thread: None,
                             index: u32::try_from(index).unwrap(),
                             expected: Expected::Value(safe_array[index]),
@@ -81,6 +93,7 @@ pub fn execute(
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,
+                                mismatch_type: MismatchType::ConstantLocation,
                                 thread: None,
                                 index: u32::try_from(index).unwrap(),
                                 expected: Expected::Strategy(RaceValueStrategy::Even),
@@ -95,6 +108,33 @@ pub fn execute(
             let num_threads = exec_options.workgroups * exec_options.workgroup_size;
 
             for thread_id in 0..num_threads {
+                for offset in 0..data_race_info.num_uninit_vars {
+                  let ind: usize = usize::try_from(
+                    thread_id * data_race_info.num_uninit_vars + offset).unwrap();
+                  if safe_uninit_array[ind] != 0 {
+                    mismatches.push(Mismatch {
+                      config: config.clone(),
+                      rep,
+                      mismatch_type: MismatchType::UninitializedVar,
+                      thread: Some(thread_id),
+                      index: u32::try_from(ind).unwrap(),
+                      expected: Expected::Value(0),
+                      actual: safe_uninit_array[ind],
+                    });
+                  }
+                  if race_uninit_array[ind] != 0 {
+                    mismatches.push(Mismatch {
+                      config: config.clone(),
+                      rep,
+                      mismatch_type: MismatchType::UninitializedVar,
+                      thread: Some(thread_id),
+                      index: u32::try_from(ind).unwrap(),
+                      expected: Expected::Value(0),
+                      actual: race_uninit_array[ind],
+                    });
+                  }
+                }
+
                 for offset in 0..data_race_info.locs_per_thread {
                     let ind: usize = usize::try_from(
                         ((thread_id * data_race_info.locs_per_thread) + offset)
@@ -106,6 +146,7 @@ pub fn execute(
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,
+                                mismatch_type: MismatchType::SafeLocation,
                                 thread: Some(thread_id),
                                 index: u32::try_from(ind).unwrap(),
                                 expected: Expected::Value(safe_array[ind]),
@@ -119,6 +160,7 @@ pub fn execute(
                                 mismatches.push(Mismatch {
                                     config: config.clone(),
                                     rep,
+                                    mismatch_type: MismatchType::SafeLocation,
                                     thread: Some(thread_id),
                                     index: u32::try_from(ind).unwrap(),
                                     expected: Expected::Strategy(RaceValueStrategy::Even),
@@ -135,7 +177,7 @@ pub fn execute(
     mismatches
 }
 
-fn reflect_shader(shader: &str, input_data: &HashMap<String, Vec<u8>>) -> PipelineDescription {
+fn reflect_shader(shader: &str, input_data: &HashMap<String, BufferInitInfo>) -> PipelineDescription {
     let module = parser::parse(shader);
 
     let (pipeline_desc, _) = reflection::reflect(&module, |resource| {

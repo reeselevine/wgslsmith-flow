@@ -1,14 +1,17 @@
 use ast::{Module, StorageClass, VarQualifier};
+use types::BufferInitInfo;
 pub use types::{PipelineDescription, PipelineResource, ResourceData, ResourceKind};
 
 
 
-fn update_size(value: &ast::DataType, init: &Option<Vec<u8>>) -> ast::DataType {
+// If the type is a runtime array, we populate the size from the buffer init info, which is passed as either a vector
+// of bytes or a size in bytes. The final size of the array is in elements, so bytes/bytes_per_element.
+fn update_size(value: &ast::DataType, init_data: &Option<BufferInitInfo>) -> ast::DataType {
   match value {
     ast::DataType::Array(inner, size) => {
       ast::DataType::array (
       inner.as_ref().clone(),
-      size.or(init.as_ref().map(|i| u32::try_from(i.len()/inner.size_bytes()).ok()).flatten()))
+      size.or(init_data.as_ref().map(|data| data.size_in_elem(inner.size_bytes()))))
     },
     other => other.clone()
   }
@@ -16,7 +19,7 @@ fn update_size(value: &ast::DataType, init: &Option<Vec<u8>>) -> ast::DataType {
 
 pub fn reflect(
     module: &Module,
-    mut init: impl FnMut(ResourceData<'_>) -> Option<Vec<u8>>,
+    mut init: impl FnMut(ResourceData<'_>) -> Option<BufferInitInfo>,
 ) -> (PipelineDescription, Vec<common::Type>) {
     let mut resources = vec![];
     let mut types = vec![];
@@ -48,10 +51,15 @@ pub fn reflect(
             let type_desc =
                 common::Type::try_from(&data_type).expect("invalid type for pipeline resource");
 
-            let init = buffer_init.map(|mut init| {
-              init.resize(type_desc.buffer_size() as usize, 0);
-              init
-            });
+            let init = buffer_init.map(|init| {
+              match init {
+                BufferInitInfo::Data { mut data } => {
+                  data.resize(type_desc.buffer_size() as usize, 0);
+                  Some(data)
+                }
+                BufferInitInfo::Size { size: _ } => None
+              }
+            }).flatten();
 
             resources.push(PipelineResource {
                 name: var.name.clone(),

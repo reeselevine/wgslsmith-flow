@@ -41,6 +41,7 @@ pub struct DataRaceInfo {
     pub locs_per_thread: u32,
     pub safe_constants: Vec<u32>,
     pub constant_locs: u32,
+    pub num_uninit_vars: u32,
     pub safe_vars: Vec<String>,
     pub race_val_strat: Option<RaceValueStrategy>,
 }
@@ -64,6 +65,7 @@ pub struct GenOptions {
     pub num_lits: u32,
     pub stmts: u32,
     pub vars: u32,
+    pub uninit_vars: u32,
     pub locs_per_thread: u32,
     pub constant_locs: u32,
     pub race_val_strat: Option<RaceValueStrategy>,
@@ -80,6 +82,7 @@ pub struct Generator<'a> {
     options: &'a GenOptions,
     safe_vars: Vec<String>,
     racy_vars: Vec<String>,
+    uninit_vars: Vec<String>,
     lits: Vec<u32>,
     safe_offsets: Vec<u32>,
     racy_offsets: Vec<u32>,
@@ -188,6 +191,12 @@ impl<'a> Generator<'a> {
             }
         }
 
+        let mut uninit_vars = vec![];
+        for i in 0..options.uninit_vars {
+          let name = format!("uninit_var_{i}");
+          uninit_vars.push(name.to_owned());
+        }
+
         let mut lhs_weight_values = vec![];
         for access_type in &lhs_access_types {
             lhs_weight_values.push(Self::lhs_access_type_weight(access_type));
@@ -221,6 +230,7 @@ impl<'a> Generator<'a> {
             options,
             safe_vars,
             racy_vars,
+            uninit_vars,
             lits,
             safe_offsets,
             racy_offsets,
@@ -312,8 +322,8 @@ impl<'a> Generator<'a> {
                 storage_class: StorageClass::Storage,
                 access_mode: Some(AccessMode::ReadWrite),
             }),
-            name: "index_buf".to_owned(),
-            data_type: DataType::array(ScalarType::U32, None),
+            name: "uninit_vars".to_owned(),
+            data_type: DataType::array(ScalarType::I32, None),
             initializer: None,
         },
         GlobalVarDecl {
@@ -322,7 +332,7 @@ impl<'a> Generator<'a> {
                 storage_class: StorageClass::Storage,
                 access_mode: Some(AccessMode::ReadWrite),
             }),
-            name: "data_buf".to_owned(),
+            name: "index_buf".to_owned(),
             data_type: DataType::array(ScalarType::U32, None),
             initializer: None,
         },
@@ -332,10 +342,21 @@ impl<'a> Generator<'a> {
                 storage_class: StorageClass::Storage,
                 access_mode: Some(AccessMode::ReadWrite),
             }),
+            name: "data_buf".to_owned(),
+            data_type: DataType::array(ScalarType::U32, None),
+            initializer: None,
+        },
+        GlobalVarDecl {
+            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(4)],
+            qualifier: Some(VarQualifier {
+                storage_class: StorageClass::Storage,
+                access_mode: Some(AccessMode::ReadWrite),
+            }),
             name: "output_buf".to_owned(),
             data_type: DataType::array(ScalarType::U32, None),
             initializer: None,
-        }];
+        },
+        ];
 
         let mut block: Vec<Statement> = vec![];
 
@@ -358,6 +379,14 @@ impl<'a> Generator<'a> {
 
         for var in self.racy_vars.to_owned() {
             block.push(self.initialize_var(var));
+        }
+
+        for var in self.uninit_vars.to_owned() {
+            block.push(self.uninitialize_var(var));
+        }
+
+        for (i, var) in self.uninit_vars.to_owned().iter().enumerate() {
+          block.push(self.read_uninitialized_var(var.clone(), i as u32));
         }
 
         // Make a block to store statements that are safe
@@ -439,6 +468,7 @@ impl<'a> Generator<'a> {
                 locs_per_thread: self.options.locs_per_thread,
                 safe_constants: self.safe_constant_locs.clone(),
                 constant_locs: self.options.constant_locs,
+                num_uninit_vars: self.options.uninit_vars,
                 safe_vars: self.safe_vars.clone(),
                 race_val_strat: self.options.race_val_strat,
             },
@@ -453,6 +483,34 @@ impl<'a> Generator<'a> {
         };
         VarDeclStatement::new(name, Some(ty.into()), Some(ExprNode::from(Lit::U32(val)))).into()
     }
+
+    fn uninitialize_var(&mut self, name: String) -> Statement {
+        let ty = ScalarType::I32;
+        VarDeclStatement::new(name, Some(ty.into()), None).into()
+    }
+
+    fn read_uninitialized_var(&mut self, name: String, offset: u32) -> Statement {
+      let base_id = BinOpExpr::new(
+        BinOp::Times,
+      VarExpr::new("global_invocation_id.x")
+              .into_node(DataType::from(ScalarType::U32)),
+                  ExprNode::from(Lit::U32(self.options.uninit_vars)));
+      let store_id = BinOpExpr::new(
+        BinOp::Plus,
+        base_id,
+        ExprNode::from(Lit::U32(offset)));
+
+      AssignmentStatement::new(
+        AssignmentLhs::array_index(
+          "uninit_vars",
+          DataType::Ref(MemoryViewType::new(
+            DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage)),
+          store_id.into()),
+        AssignmentOp::Simple,
+    VarExpr::new(name).into_node(DataType::from(ScalarType::I32))).into()
+    }
+
 
     fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
         ExprNode::from(Lit::U32(choices.choose(self.rng).unwrap().to_owned()))

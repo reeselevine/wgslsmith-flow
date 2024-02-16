@@ -17,6 +17,8 @@ buffer-check = { path = "../buffer-check" }
 common = { path = "../common" }
 parser = { path = "../parser" }
 reflection = { path = "../reflection" }
+reflection-types = { path = "../reflection-types" }
+
 types = { path = "../harness-types", package = "harness-types" }
 
 [dependencies.clap]

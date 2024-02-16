@@ -70,6 +70,10 @@ pub struct Options {
     #[clap(long, action, default_value = "8")]
     pub vars: u32,
 
+    /// Number of uninitialized local variables to generate
+    #[clap(long, action, default_value = "8")]
+    pub uninit_vars: u32,
+
     /// Number of memory locations associated with each thread 
     #[clap(long, action, default_value = "8")]
     pub locs_per_thread: u32,
@@ -145,6 +149,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
       num_lits: options.num_lits,
       stmts: options.stmts,
       vars: options.vars,
+      uninit_vars: options.uninit_vars,
       locs_per_thread: options.locs_per_thread,
       constant_locs: options.constant_locs,
       race_val_strat: options.race_value_strategy,

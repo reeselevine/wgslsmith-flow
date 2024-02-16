@@ -423,6 +423,7 @@ dependencies = [
  "parser",
  "rand",
  "reflection",
+ "reflection-types",
  "serde",
  "serde_json",
 ]
@@ -610,6 +611,7 @@ dependencies = [
  "parser",
  "rand",
  "reflection",
+ "reflection-types",
  "serde",
  "serde_json",
 ]
@@ -1022,6 +1024,7 @@ dependencies = [
  "harness-types",
  "parser",
  "reflection",
+ "reflection-types",
  "serde_json",
  "termcolor",
 ]
@@ -1771,6 +1774,8 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2341,6 +2346,7 @@ dependencies = [
  "parser",
  "rand",
  "reflection",
+ "reflection-types",
  "serde_json",
 ]
 

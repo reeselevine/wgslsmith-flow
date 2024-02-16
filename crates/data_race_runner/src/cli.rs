@@ -1,5 +1,6 @@
 use clap::Parser;
 use data_race_generator::{DataRaceInfo, RaceValueStrategy};
+use reflection_types::BufferInitInfo;
 use types::ConfigId;
 use colored::Colorize;
 
@@ -11,8 +12,6 @@ use eyre::{eyre, Context};
 use std::collections::HashMap;
 
 use crate::ExecOptions;
-
-
 
 #[derive(Parser)]
 pub struct RunOptions {
@@ -68,8 +67,7 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     let racy_shader = read_shader_from_path(&options.racy_shader)?;
     let data_race_info: DataRaceInfo = serde_json::from_reader(File::open(&options.data_race_info)?)?;
     let input_size = ((options.workgroup_size * options.workgroups * data_race_info.locs_per_thread) + data_race_info.constant_locs) * 4; // Mult by 4 since u8
-    let input_data = get_input_data(options.input_data, &data_race_info, input_size)?; 
-
+    let input_data = get_input_data(&options, &data_race_info, input_size)?; 
     let exec_options = ExecOptions {
       configs,
       workgroups: options.workgroups,
@@ -90,8 +88,8 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     Ok(())
 }
 
-fn get_input_data(input_data: Option<String>, data_race_info: &DataRaceInfo, size: u32) -> eyre::Result<HashMap<String, Vec<u8>>> {
-  match input_data {
+fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo, size: u32) -> eyre::Result<HashMap<String, BufferInitInfo>> {
+  match &options.input_data {
     Some(input_data) => match File::open(input_data) {
       Ok(file) => serde_json::from_reader(file)
                         .wrap_err_with(|| eyre!("failed to parse input data")),
@@ -104,7 +102,8 @@ fn get_input_data(input_data: Option<String>, data_race_info: &DataRaceInfo, siz
           None => (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
         };
       let mut map = HashMap::new();
-      map.insert("0:0".to_owned(), random_data);
+      map.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
+      map.insert("0:1".to_owned(), BufferInitInfo::Size { size: data_race_info.num_uninit_vars * options.workgroups * options.workgroup_size * 4});
       Ok(map)
     }
   }
