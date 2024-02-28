@@ -70,6 +70,7 @@ pub struct GenOptions {
     pub constant_locs: u32,
     pub race_val_strat: Option<RaceValueStrategy>,
     pub oob_pct: u32,
+    pub pattern_slots: u32,
 }
 
 pub fn gen(options: &GenOptions) -> Shaders {
@@ -96,6 +97,7 @@ pub struct Generator<'a> {
     lhs_weights: WeightedIndex<i32>,
     racy_lhs_access_types: Vec<AccessType>,
     racy_lhs_weights: WeightedIndex<i32>,
+    pattern_slots_used: u32,
 }
 
 const SAFE_ACCESS_TYPES: [AccessType; 4] = [
@@ -244,6 +246,7 @@ impl<'a> Generator<'a> {
             lhs_weights,
             racy_lhs_access_types,
             racy_lhs_weights,
+            pattern_slots_used: 0,
             //curr_loop_var: 0,
         }
     }
@@ -368,6 +371,32 @@ impl<'a> Generator<'a> {
                     BinOp::Times,
                     VarExpr::new("num_workgroups.x").into_node(DataType::from(ScalarType::U32)),
                     ExprNode::from(Lit::U32(self.options.workgroup_size)),
+                ),
+            )
+            .into(),
+        );
+
+        // total pattern slots is the number of workgroups times the workgroup size times the number of pattern slots
+        block.push(
+            LetDeclStatement::new(
+                "pattern_index",
+                BinOpExpr::new(
+                    BinOp::Times,
+                    VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                    ExprNode::from(Lit::U32(self.options.pattern_slots)),
+                ),
+            )
+            .into(),
+        );
+
+        // total pattern slots is the number of workgroups times the workgroup size times the number of pattern slots
+        block.push(
+            LetDeclStatement::new(
+                "total_pattern_slots",
+                BinOpExpr::new(
+                    BinOp::Times,
+                    VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)),
+                    ExprNode::from(Lit::U32(self.options.pattern_slots)),
                 ),
             )
             .into(),
@@ -873,7 +902,7 @@ impl<'a> Generator<'a> {
         // Access types in the loop initializer can be racy or non-racy, since no writes occur
         let loop_initializer = self.rhs_access_types[self.rhs_weights.sample(self.rng)];
 
-        let cur_block_racy = racy_block || RACY_ACCESS_TYPES.contains(&loop_initializer);
+        let cur_block_racy: bool = racy_block || RACY_ACCESS_TYPES.contains(&loop_initializer);
 
         let for_loop_header = self.gen_for_header(loop_initializer, nest_level);
 
@@ -914,29 +943,35 @@ impl<'a> Generator<'a> {
     }
 
     /*
-        index_buf[local_id] = some_low_number(thread_id) // sometimes, optional, many times
+        total_pattern_slots = total_ids * pattern_slots;
+        pattern_index = id.x * pattern_slots; 
 
-        // sometimes it could be this too, where NUM_THREADS is the size of the array. This way the compiler can’t make everything 0 (like it could above), but it could still try to remove the bounds check.
-        index_buf[local_id] = min(index_buf[local_id]], NUM_THREADS); 
+        index_buf[total_pattern_slots] 
+        data_buf[256]
+        output_buf[total_pattern_slots]
 
-        If (index_buf[local_id]] < 50) {
-        ... <- have to be racy
-            output_buf[local_id]] = data_buf[index_buf[local_id]];
-        ...<- have to be racy
+        c = 0..pattern_slots 
+        
+        for c in pattern_slots:
+        index_buf[pattern_index + c] = 0
+
+        if (index_buf[pattern_index + c] < total_ids) {
+            statements...
+
+            output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
         }
-        ...<- could be safe/racy
-        index_buf[shuffled_id(local_id))] = 10001; // idea for shuffle: (thread_id + SOME_NUM) % NUM_THREADS (some big number) 
+        index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
      */
     fn gen_pattern(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
-        if stmts_left < 6 {
+        if stmts_left < 4 || self.options.pattern_slots == self.pattern_slots_used {
             return self.gen_statement(stmts_left, nest_level, racy_block);
         }
 
-        MemoryViewType::new(
-            DataType::array(ScalarType::U32, None),
-            StorageClass::Storage,
-        );
-        // Index assignment 
+        let c = self.pattern_slots_used;
+
+        self.pattern_slots_used+=1; 
+
+        // Index assignment: index_buf[pattern_index + c] = 0
         let assign = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "index_buf",
@@ -944,32 +979,20 @@ impl<'a> Generator<'a> {
                 DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 )),
-                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                BinOpExpr::new(
+                    BinOp::Plus,
+                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                    Lit::U32(c)
+                ).into()
             ),
             AssignmentOp::Simple,
             Lit::U32(0),
         );
 
-        /*let if_condition = ExprNode {
-            data_type: todo!(),
-            expr: todo!(),
-        };*/
+        let mut if_body_stmts: Vec<Statement> = Vec::new();
 
-        let index = Postfix::index(VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)));
-        let arr_expr = VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
-            DataType::array(ScalarType::U32, None),
-            StorageClass::Storage,
-        )));
-        let first: ExprNode = PostfixExpr::new(arr_expr, index).into();
-
-        let arr_expr2 = VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
-            DataType::array(ScalarType::U32, None),
-            StorageClass::Storage,
-        )));
-
-        let second: ExprNode = PostfixExpr::new(arr_expr2, Postfix::index(first.clone())).into();
-
-        let mut statements: Vec<Statement> = vec![assign.into()];
+        // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
+        // There has to be a better way to do this??? This feels like javascript
         let array_cast = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "output_buf",
@@ -977,31 +1000,74 @@ impl<'a> Generator<'a> {
                 DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 )),
-                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
-            ),
+                BinOpExpr::new(
+                    BinOp::Plus,
+                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                    Lit::U32(c)
+                    ).into(),
+                ),
             AssignmentOp::Simple,
-            second
+            PostfixExpr::new( 
+                VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                ))),
+                Postfix::index(
+                    PostfixExpr::new(   
+                        VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                            DataType::array(ScalarType::U32, None),
+                            StorageClass::Storage,
+                        ))),
+                        Postfix::index(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c)
+                            ),
+                        )
+                    ),
+                )
+            )
         );
 
-        let mut if_body = vec![];
-        for _ in 1..10 {
-            if_body.push(self.gen_statement(20, nest_level, true).statement)
-        }
-        if_body.push(array_cast.into());
 
-        let if_statement = IfStatement::new(
+        let mut num_statements = 100;
+        
+        /*cmp::min(
+            self.rng.gen_range(1..self.options.block_max_stmts),
+            stmts_left - 4,
+        );*/
+
+        while num_statements > 0 {
+            let gen_info = self.gen_statement(num_statements, nest_level, true);
+            if_body_stmts.push(gen_info.statement);
+            num_statements -= gen_info.generated_statements;
+        }
+        if_body_stmts.push(array_cast.into());
+
+        let generated_statements = num_statements + 3;
+        
+        // (index_buf[pattern_index + c] < total_ids) 
+        let if_stmt = IfStatement::new(
             BinOpExpr::new(
                 BinOp::Less,
-                first,
-                Lit::U32(50)
-            ), 
-            if_body
+                PostfixExpr::new( 
+                    VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    ))),
+                    Postfix::index(BinOpExpr::new(
+                        BinOp::Plus,
+                        VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                        Lit::U32(c)
+                    ))
+                ),
+                Lit::U32(256)
+            ),
+            if_body_stmts.clone()
         );
-        
-        //race_if_stmts.push(Statement::If(if_statement));
 
-        // Handover hand 
-        let assign2 = AssignmentStatement::new(
+        // Handoff: index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
+        let handoff = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "index_buf",
                 DataType::Ref(MemoryViewType::new(
@@ -1013,31 +1079,25 @@ impl<'a> Generator<'a> {
                     BinOpExpr::new(
                         BinOp::Plus,
                         VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
-                        Lit::U32(283)
+                        Lit::U32(128)
                     ), 
-                    VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32))
-            ).into()
-                
+                    VarExpr::new("total_pattern_slots").into_node(DataType::from(ScalarType::U32))
+                ).into()
             ),
             AssignmentOp::Simple,
-            Lit::U32(self.rng.gen_range(self.options.workgroup_size*64..self.options.workgroup_size * 640)),
+            BinOpExpr::new(
+                BinOp::Plus,
+                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                Lit::U32(c + 256)
+            ),
         );
 
-        for _ in 1..10 {
-            statements.push(self.gen_statement(20, nest_level, true).statement);
-        }
-        statements.push(if_statement.into());
-        for _ in 1..10 {
-            statements.push(self.gen_statement(20, nest_level, true).statement);
-        }
-
-        statements.push(assign2.into());
+        let pattern_stmts: Vec<Statement> = vec![assign.into(), if_stmt.into(), handoff.into()];
 
         StatementGenInfo {
-            generated_statements: 3, // statements in the if block plus 1 for the if condition
-            statement: statements.into(),
+            generated_statements: generated_statements, // statements in the if block plus 1 for the if condition
+            statement: pattern_stmts.into(),
             safe_statement: None,
         }
-    
     }
 }

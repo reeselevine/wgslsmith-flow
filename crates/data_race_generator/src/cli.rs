@@ -89,6 +89,10 @@ pub struct Options {
     /// Percentage of time racy statements can go out of bounds
     #[clap(long, action, default_value = "0")]
     pub oob_pct: u32,
+
+    /// The number of times a oob pattern is attempted
+    #[clap(long, action, default_value = "0")]
+    pub pattern_slots: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +158,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
       constant_locs: options.constant_locs,
       race_val_strat: options.race_value_strategy,
       oob_pct: options.oob_pct,
+      pattern_slots: options.pattern_slots
     };
     let out = crate::Generator::new(&mut rng, &gen_options).gen_module();
     
