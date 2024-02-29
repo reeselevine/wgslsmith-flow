@@ -121,6 +121,11 @@ pub struct Options {
     /// When generating random shaders, whether to disable out of bounds accesses
     #[clap(long, action)]
     pub disable_oob: bool,
+
+    /// Number of pattern slots 
+    #[clap(long, action, default_value = "3")]
+    pub pattern_slots: u32,
+
 }
 
 fn random_opts(disable_oob: bool) -> GenOptions {
@@ -142,7 +147,8 @@ fn random_opts(disable_oob: bool) -> GenOptions {
     locs_per_thread: rng.gen_range(1..=16),
     constant_locs: rng.gen_range(1..=16),
     oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
-    race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) } 
+    race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) },
+    pattern_slots: rng.gen_range(1..=5)
   } 
 }
 
@@ -184,6 +190,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             constant_locs: options.constant_locs,
             race_val_strat: options.race_value_strategy,
             oob_pct: options.oob_pct,
+            pattern_slots: options.pattern_slots
           }
         };
 
