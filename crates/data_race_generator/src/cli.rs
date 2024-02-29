@@ -90,8 +90,12 @@ pub struct Options {
     #[clap(long, action, default_value = "0")]
     pub oob_pct: u32,
 
+    /// The size of the buffer to try to read out of bounds 
+    #[clap(long, action, default_value = "256")]
+    pub data_buf_size: u32,
+
     /// The number of times a oob pattern is attempted
-    #[clap(long, action, default_value = "0")]
+    #[clap(long, action, default_value = "3")]
     pub pattern_slots: u32,
 }
 
@@ -158,6 +162,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
       constant_locs: options.constant_locs,
       race_val_strat: options.race_value_strategy,
       oob_pct: options.oob_pct,
+      data_buf_size: options.data_buf_size,
       pattern_slots: options.pattern_slots
     };
     let out = crate::Generator::new(&mut rng, &gen_options).gen_module();

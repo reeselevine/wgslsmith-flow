@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use ast::types::{DataType, MemoryViewType, ScalarType};
 use ast::{
-    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, Else, ExprNode,
-    FnAttr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit, ForLoopUpdate, GlobalVarAttr,
-    GlobalVarDecl, IfStatement, LetDeclStatement, Lit, Module, Postfix, PostfixExpr, ShaderStage,
-    Statement, StorageClass, VarDeclStatement, VarExpr, VarQualifier, ForLoopStatement, FnCallExpr, BuiltinFn,
+    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn,
+    Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit,
+    ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement,
+    Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, VarDeclStatement,
+    VarExpr, VarQualifier,
 };
 
 use rand::distributions::WeightedIndex;
@@ -70,6 +71,7 @@ pub struct GenOptions {
     pub constant_locs: u32,
     pub race_val_strat: Option<RaceValueStrategy>,
     pub oob_pct: u32,
+    pub data_buf_size: u32,
     pub pattern_slots: u32,
 }
 
@@ -195,8 +197,8 @@ impl<'a> Generator<'a> {
 
         let mut uninit_vars = vec![];
         for i in 0..options.uninit_vars {
-          let name = format!("uninit_var_{i}");
-          uninit_vars.push(name.to_owned());
+            let name = format!("uninit_var_{i}");
+            uninit_vars.push(name.to_owned());
         }
 
         let mut lhs_weight_values = vec![];
@@ -263,45 +265,45 @@ impl<'a> Generator<'a> {
 
     fn lhs_access_type_weight(access_type: &AccessType) -> i32 {
         match access_type {
-            AccessType::ThreadSafe => 17,
-            AccessType::ThreadUnsafe => 17,
-            AccessType::ThreadRace => 17,
-            AccessType::ConstantUnsafe => 17,
-            AccessType::VarSafe => 16,
-            AccessType::VarUnsafe => 16,
+            AccessType::ThreadSafe => 10,
+            AccessType::ThreadUnsafe => 10,
+            AccessType::ThreadRace => 10,
+            AccessType::ConstantUnsafe => 10,
+            AccessType::VarSafe => 30,
+            AccessType::VarUnsafe => 30,
             _ => 0,
         }
     }
 
     fn racy_lhs_access_type_weight(access_type: &AccessType) -> i32 {
         match access_type {
-            AccessType::ThreadUnsafe => 25,
-            AccessType::ThreadRace => 25,
-            AccessType::ConstantUnsafe => 25,
-            AccessType::VarUnsafe => 25,
+            AccessType::ThreadUnsafe => 13,
+            AccessType::ThreadRace => 13,
+            AccessType::ConstantUnsafe => 13,
+            AccessType::VarUnsafe => 61,
             _ => 0,
         }
     }
 
     fn rhs_access_type_weight(access_type: &AccessType) -> i32 {
         match access_type {
-            AccessType::ThreadSafe => 13,
-            AccessType::ThreadUnsafe => 13,
-            AccessType::ThreadRace => 13,
-            AccessType::ConstantSafe => 13,
-            AccessType::ConstantUnsafe => 12,
-            AccessType::VarSafe => 12,
-            AccessType::VarUnsafe => 12,
-            AccessType::Literal => 12,
+            AccessType::ThreadSafe => 8,
+            AccessType::ThreadUnsafe => 8,
+            AccessType::ThreadRace => 8,
+            AccessType::ConstantSafe => 8,
+            AccessType::ConstantUnsafe => 8,
+            AccessType::VarSafe => 20,
+            AccessType::VarUnsafe => 20,
+            AccessType::Literal => 20,
         }
     }
 
     fn safe_rhs_access_type_weight(access_type: &AccessType) -> i32 {
         match access_type {
-            AccessType::ThreadSafe => 30,
-            AccessType::ConstantSafe => 30,
-            AccessType::VarSafe => 20,
-            AccessType::Literal => 20,
+            AccessType::ThreadSafe => 20,
+            AccessType::ConstantSafe => 20,
+            AccessType::VarSafe => 30,
+            AccessType::Literal => 30,
             _ => 0,
         }
     }
@@ -309,56 +311,56 @@ impl<'a> Generator<'a> {
     #[tracing::instrument(skip(self))]
     pub fn gen_module(&mut self) -> Shaders {
         let global_vars = vec![
-        GlobalVarDecl {
-            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
-            qualifier: Some(VarQualifier {
-                storage_class: StorageClass::Storage,
-                access_mode: Some(AccessMode::ReadWrite),
-            }),
-            name: "mem".to_owned(),
-            data_type: DataType::array(ScalarType::U32, None),
-            initializer: None,
-        },
-        GlobalVarDecl {
-            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(1)],
-            qualifier: Some(VarQualifier {
-                storage_class: StorageClass::Storage,
-                access_mode: Some(AccessMode::ReadWrite),
-            }),
-            name: "uninit_vars".to_owned(),
-            data_type: DataType::array(ScalarType::I32, None),
-            initializer: None,
-        },
-        GlobalVarDecl {
-            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(2)],
-            qualifier: Some(VarQualifier {
-                storage_class: StorageClass::Storage,
-                access_mode: Some(AccessMode::ReadWrite),
-            }),
-            name: "index_buf".to_owned(),
-            data_type: DataType::array(ScalarType::U32, None),
-            initializer: None,
-        },
-        GlobalVarDecl {
-            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(3)],
-            qualifier: Some(VarQualifier {
-                storage_class: StorageClass::Storage,
-                access_mode: Some(AccessMode::ReadWrite),
-            }),
-            name: "data_buf".to_owned(),
-            data_type: DataType::array(ScalarType::U32, None),
-            initializer: None,
-        },
-        GlobalVarDecl {
-            attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(4)],
-            qualifier: Some(VarQualifier {
-                storage_class: StorageClass::Storage,
-                access_mode: Some(AccessMode::ReadWrite),
-            }),
-            name: "output_buf".to_owned(),
-            data_type: DataType::array(ScalarType::U32, None),
-            initializer: None,
-        },
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(0)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "mem".to_owned(),
+                data_type: DataType::array(ScalarType::U32, None),
+                initializer: None,
+            },
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(1)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "uninit_vars".to_owned(),
+                data_type: DataType::array(ScalarType::I32, None),
+                initializer: None,
+            },
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(2)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "index_buf".to_owned(),
+                data_type: DataType::array(ScalarType::U32, None),
+                initializer: None,
+            },
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(3)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "data_buf".to_owned(),
+                data_type: DataType::array(ScalarType::U32, None),
+                initializer: None,
+            },
+            GlobalVarDecl {
+                attrs: vec![GlobalVarAttr::Group(0), GlobalVarAttr::Binding(4)],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::Storage,
+                    access_mode: Some(AccessMode::ReadWrite),
+                }),
+                name: "output_buf".to_owned(),
+                data_type: DataType::array(ScalarType::U32, None),
+                initializer: None,
+            },
         ];
 
         let mut block: Vec<Statement> = vec![];
@@ -382,7 +384,8 @@ impl<'a> Generator<'a> {
                 "pattern_index",
                 BinOpExpr::new(
                     BinOp::Times,
-                    VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                    VarExpr::new("global_invocation_id.x")
+                        .into_node(DataType::from(ScalarType::U32)),
                     ExprNode::from(Lit::U32(self.options.pattern_slots)),
                 ),
             )
@@ -415,7 +418,7 @@ impl<'a> Generator<'a> {
         }
 
         for (i, var) in self.uninit_vars.to_owned().iter().enumerate() {
-          block.push(self.read_uninitialized_var(var.clone(), i as u32));
+            block.push(self.read_uninitialized_var(var.clone(), i as u32));
         }
 
         // Make a block to store statements that are safe
@@ -429,7 +432,7 @@ impl<'a> Generator<'a> {
             block.push(gen_info.statement.clone());
             match gen_info.safe_statement {
                 Some(stmt) => {
-                  safe_block.push(stmt.clone());
+                    safe_block.push(stmt.clone());
                 }
                 None => {}
             }
@@ -438,8 +441,16 @@ impl<'a> Generator<'a> {
 
         // We add a dummy statement at the end of the shader to ensure the safe shader uses memory at least once, avoiding
         // over-zealous compiler errors
-        let dummy_access_type = if self.safe_offsets.is_empty() { AccessType::ThreadUnsafe } else { AccessType::ThreadSafe };
-        let dummy_stmt = VarDeclStatement::new("var_dummy", Some(ScalarType::U32.into()), Some(self.gen_op(dummy_access_type)));
+        let dummy_access_type = if self.safe_offsets.is_empty() {
+            AccessType::ThreadUnsafe
+        } else {
+            AccessType::ThreadSafe
+        };
+        let dummy_stmt = VarDeclStatement::new(
+            "var_dummy",
+            Some(ScalarType::U32.into()),
+            Some(self.gen_op(dummy_access_type)),
+        );
         block.push(dummy_stmt.clone().into());
         safe_block.push(dummy_stmt.into());
 
@@ -519,27 +530,27 @@ impl<'a> Generator<'a> {
     }
 
     fn read_uninitialized_var(&mut self, name: String, offset: u32) -> Statement {
-      let base_id = BinOpExpr::new(
-        BinOp::Times,
-      VarExpr::new("global_invocation_id.x")
-              .into_node(DataType::from(ScalarType::U32)),
-                  ExprNode::from(Lit::U32(self.options.uninit_vars)));
-      let store_id = BinOpExpr::new(
-        BinOp::Plus,
-        base_id,
-        ExprNode::from(Lit::U32(offset)));
+        let base_id = BinOpExpr::new(
+            BinOp::Times,
+            VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+            ExprNode::from(Lit::U32(self.options.uninit_vars)),
+        );
+        let store_id = BinOpExpr::new(BinOp::Plus, base_id, ExprNode::from(Lit::U32(offset)));
 
-      AssignmentStatement::new(
-        AssignmentLhs::array_index(
-          "uninit_vars",
-          DataType::Ref(MemoryViewType::new(
-            DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage)),
-          store_id.into()),
-        AssignmentOp::Simple,
-    VarExpr::new(name).into_node(DataType::from(ScalarType::I32))).into()
+        AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "uninit_vars",
+                DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                store_id.into(),
+            ),
+            AssignmentOp::Simple,
+            VarExpr::new(name).into_node(DataType::from(ScalarType::I32)),
+        )
+        .into()
     }
-
 
     fn constant_expr(&mut self, choices: Vec<u32>) -> ExprNode {
         ExprNode::from(Lit::U32(choices.choose(self.rng).unwrap().to_owned()))
@@ -688,19 +699,18 @@ impl<'a> Generator<'a> {
     ) -> StatementGenInfo {
         // Randomly pick what kind of statement to generate, then return the statement back
         let decider = self.rng.gen_range(0..100);
-        if decider < 80 || nest_level == self.options.block_max_nest_level || stmts_left < 2 {
+        if decider < 70 || nest_level == self.options.block_max_nest_level || stmts_left < 2 {
             // Gen assign
             return self.gen_assign(racy_block);
         } else if decider < 90 {
             // Gen if
             return self.gen_if(stmts_left, nest_level + 1, racy_block);
-        } else if decider < 98 {
+        } else if decider < 95 {
             // Gen loop
             return self.gen_for(stmts_left, nest_level + 1, racy_block);
         } else {
-            return self.gen_pattern(stmts_left, nest_level + 1, racy_block)
+            return self.gen_pattern(stmts_left, nest_level + 1, racy_block);
         }
-
     }
 
     fn gen_assign(&mut self, racy_block: bool) -> StatementGenInfo {
@@ -783,7 +793,8 @@ impl<'a> Generator<'a> {
 
     fn gen_if(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
         // Access types in the if comparison can be racy or non-racy, since no writes occur
-        let first_if_access_type: AccessType = self.rhs_access_types[self.rhs_weights.sample(self.rng)];
+        let first_if_access_type: AccessType =
+            self.rhs_access_types[self.rhs_weights.sample(self.rng)];
 
         let cur_block_racy = racy_block || RACY_ACCESS_TYPES.contains(&first_if_access_type);
 
@@ -875,7 +886,7 @@ impl<'a> Generator<'a> {
         let init = ForLoopInit::VarDecl(VarDeclStatement::new(
             &ident,
             Some(DataType::from(ScalarType::U32)),
-            Some(min_expr.into_node(DataType::from(ScalarType::U32)))
+            Some(min_expr.into_node(DataType::from(ScalarType::U32))),
         ));
         let for_cond = BinOpExpr::new(
             BinOp::Greater,
@@ -943,50 +954,56 @@ impl<'a> Generator<'a> {
     }
 
     /*
-        total_pattern_slots = total_ids * pattern_slots;
-        pattern_index = id.x * pattern_slots; 
+       total_pattern_slots = total_ids * pattern_slots;
+       pattern_index = id.x * pattern_slots;
 
-        index_buf[total_pattern_slots] 
-        data_buf[256]
-        output_buf[total_pattern_slots]
+       index_buf[total_pattern_slots]
+       data_buf[256]
+       output_buf[total_pattern_slots]
 
-        c = 0..pattern_slots 
-        
-        for c in pattern_slots:
-        index_buf[pattern_index + c] = 0
+       c = 0..pattern_slots
 
-        if (index_buf[pattern_index + c] < total_ids) {
-            statements...
+       for c in pattern_slots:
+       index_buf[pattern_index + c] = 0
 
-            output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
-        }
-        index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
-     */
-    fn gen_pattern(&mut self, stmts_left: u32, nest_level: u32, racy_block: bool) -> StatementGenInfo {
+       if (index_buf[pattern_index + c] < total_ids) {
+           statements...
+
+           output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
+       }
+       index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
+    */
+    fn gen_pattern(
+        &mut self,
+        stmts_left: u32,
+        nest_level: u32,
+        racy_block: bool,
+    ) -> StatementGenInfo {
         if stmts_left < 4 || self.options.pattern_slots == self.pattern_slots_used {
             return self.gen_statement(stmts_left, nest_level, racy_block);
         }
 
         let c = self.pattern_slots_used;
 
-        self.pattern_slots_used+=1; 
+        self.pattern_slots_used += 1;
 
         // Index assignment: index_buf[pattern_index + c] = 0
         let assign = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "index_buf",
                 DataType::Ref(MemoryViewType::new(
-                DataType::array(ScalarType::U32, None),
+                    DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 )),
                 BinOpExpr::new(
                     BinOp::Plus,
                     VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c)
-                ).into()
+                    Lit::U32(c),
+                )
+                .into(),
             ),
             AssignmentOp::Simple,
-            Lit::U32(0),
+            Lit::U32(self.rng.gen_range(0..=2)),
         );
 
         let mut if_body_stmts: Vec<Statement> = Vec::new();
@@ -997,60 +1014,23 @@ impl<'a> Generator<'a> {
             AssignmentLhs::array_index(
                 "output_buf",
                 DataType::Ref(MemoryViewType::new(
-                DataType::array(ScalarType::U32, None),
+                    DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 )),
                 BinOpExpr::new(
                     BinOp::Plus,
                     VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c)
-                    ).into(),
-                ),
+                    Lit::U32(c),
+                )
+                .into(),
+            ),
             AssignmentOp::Simple,
-            PostfixExpr::new( 
+            PostfixExpr::new(
                 VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
                     DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 ))),
-                Postfix::index(
-                    PostfixExpr::new(   
-                        VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
-                            DataType::array(ScalarType::U32, None),
-                            StorageClass::Storage,
-                        ))),
-                        Postfix::index(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c)
-                            ),
-                        )
-                    ),
-                )
-            )
-        );
-
-
-        let mut num_statements = 100;
-        
-        /*cmp::min(
-            self.rng.gen_range(1..self.options.block_max_stmts),
-            stmts_left - 4,
-        );*/
-
-        while num_statements > 0 {
-            let gen_info = self.gen_statement(num_statements, nest_level, true);
-            if_body_stmts.push(gen_info.statement);
-            num_statements -= gen_info.generated_statements;
-        }
-        if_body_stmts.push(array_cast.into());
-
-        let generated_statements = num_statements + 3;
-        
-        // (index_buf[pattern_index + c] < total_ids) 
-        let if_stmt = IfStatement::new(
-            BinOpExpr::new(
-                BinOp::Less,
-                PostfixExpr::new( 
+                Postfix::index(PostfixExpr::new(
                     VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
                         DataType::array(ScalarType::U32, None),
                         StorageClass::Storage,
@@ -1058,44 +1038,102 @@ impl<'a> Generator<'a> {
                     Postfix::index(BinOpExpr::new(
                         BinOp::Plus,
                         VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                        Lit::U32(c)
-                    ))
-                ),
-                Lit::U32(256)
+                        Lit::U32(c),
+                    )),
+                )),
             ),
-            if_body_stmts.clone()
         );
+
+        // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
+        // used for the for the pattern)
+        let mut num_statements = cmp::min(
+            self.rng.gen_range(1..self.options.block_max_stmts),
+            stmts_left - 3,
+        );
+        let generated_statements = num_statements + 3;
+
+        while num_statements > 0 {
+            let gen_info = self.gen_statement(num_statements, nest_level, true);
+            if_body_stmts.push(gen_info.statement);
+            num_statements -= gen_info.generated_statements;
+        }
+
+        if_body_stmts.push(array_cast.into());
+
+        // half the time we include an if statement as part of the pattern
+        let mut pattern_stmts = if self.rng.gen_bool(0.5) {
+            let if_stmt = IfStatement::new(
+                BinOpExpr::new(
+                    BinOp::Less,
+                    PostfixExpr::new(
+                        VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                            DataType::array(ScalarType::U32, None),
+                            StorageClass::Storage,
+                        ))),
+                        Postfix::index(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index")
+                                .into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        )),
+                    ),
+                    Lit::U32(self.options.data_buf_size),
+                ),
+                if_body_stmts.clone(),
+            );
+            vec![if_stmt.into()]
+        } else {
+            if_body_stmts
+        };
+
+        // (index_buf[pattern_index + c] < total_ids)
 
         // Handoff: index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
         let handoff = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "index_buf",
                 DataType::Ref(MemoryViewType::new(
-                DataType::array(ScalarType::U32, None),
+                    DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 )),
                 BinOpExpr::new(
-                    BinOp::Mod, 
+                    BinOp::Plus,
                     BinOpExpr::new(
-                        BinOp::Plus,
-                        VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
-                        Lit::U32(128)
-                    ), 
-                    VarExpr::new("total_pattern_slots").into_node(DataType::from(ScalarType::U32))
-                ).into()
+                        BinOp::Times,
+                        BinOpExpr::new(
+                            BinOp::Mod,
+                            BinOpExpr::new(
+                                BinOp::Plus,
+                                VarExpr::new("global_invocation_id.x")
+                                    .into_node(DataType::from(ScalarType::U32)),
+                                Lit::U32(8),
+                            ),
+                            VarExpr::new("total_pattern_slots")
+                                .into_node(DataType::from(ScalarType::U32)),
+                        ),
+                        Lit::U32(self.options.pattern_slots),
+                    ),
+                    Lit::U32(c),
+                )
+                .into(),
             ),
             AssignmentOp::Simple,
             BinOpExpr::new(
                 BinOp::Plus,
-                VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
-                Lit::U32(c + 256)
+                  BinOpExpr::new(
+                    BinOp::Times,
+                  VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                  Lit::U32(self.pattern_slots_used)
+                ),
+                Lit::U32(self.options.data_buf_size),
             ),
         );
 
-        let pattern_stmts: Vec<Statement> = vec![assign.into(), if_stmt.into(), handoff.into()];
+        pattern_stmts.insert(0, assign.into());
+        pattern_stmts.push(handoff.into());
 
         StatementGenInfo {
-            generated_statements: generated_statements, // statements in the if block plus 1 for the if condition
+            generated_statements: generated_statements,
             statement: pattern_stmts.into(),
             safe_statement: None,
         }

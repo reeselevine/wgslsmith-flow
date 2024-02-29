@@ -122,6 +122,10 @@ pub struct Options {
     #[clap(long, action)]
     pub disable_oob: bool,
 
+    /// Size of buffer to read out of bounds from
+    #[clap(long, action, default_value = "256")]
+    pub data_buf_size: u32,
+
     /// Number of pattern slots 
     #[clap(long, action, default_value = "3")]
     pub pattern_slots: u32,
@@ -148,6 +152,7 @@ fn random_opts(disable_oob: bool) -> GenOptions {
     constant_locs: rng.gen_range(1..=16),
     oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
     race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) },
+    data_buf_size: rng.gen_range(32..=1024),
     pattern_slots: rng.gen_range(1..=5)
   } 
 }
@@ -190,6 +195,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             constant_locs: options.constant_locs,
             race_val_strat: options.race_value_strategy,
             oob_pct: options.oob_pct,
+            data_buf_size: options.data_buf_size,
             pattern_slots: options.pattern_slots
           }
         };
