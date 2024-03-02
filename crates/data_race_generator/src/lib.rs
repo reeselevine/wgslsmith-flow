@@ -45,6 +45,8 @@ pub struct DataRaceInfo {
     pub num_uninit_vars: u32,
     pub safe_vars: Vec<String>,
     pub race_val_strat: Option<RaceValueStrategy>,
+    pub data_buf_size: u32,
+    pub pattern_slots: u32
 }
 
 pub struct Shaders {
@@ -392,19 +394,6 @@ impl<'a> Generator<'a> {
             .into(),
         );
 
-        // total pattern slots is the number of workgroups times the workgroup size times the number of pattern slots
-        block.push(
-            LetDeclStatement::new(
-                "total_pattern_slots",
-                BinOpExpr::new(
-                    BinOp::Times,
-                    VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)),
-                    ExprNode::from(Lit::U32(self.options.pattern_slots)),
-                ),
-            )
-            .into(),
-        );
-
         for var in self.safe_vars.to_owned() {
             block.push(self.initialize_var(var));
         }
@@ -446,13 +435,25 @@ impl<'a> Generator<'a> {
         } else {
             AccessType::ThreadSafe
         };
-        let dummy_stmt = VarDeclStatement::new(
+        let dummy_mem_stmt = VarDeclStatement::new(
             "var_dummy",
             Some(ScalarType::U32.into()),
             Some(self.gen_op(dummy_access_type)),
         );
-        block.push(dummy_stmt.clone().into());
-        safe_block.push(dummy_stmt.into());
+        block.push(dummy_mem_stmt.clone().into());
+        safe_block.push(dummy_mem_stmt.into());
+
+        let dummy_index_buf_stmt = self.gen_dummy_stmt("dummy_index_var", "index_buf");
+        block.push(dummy_index_buf_stmt.clone());
+        safe_block.push(dummy_index_buf_stmt);
+
+        let dummy_data_buf_stmt = self.gen_dummy_stmt("dummy_data_var", "data_buf");
+        block.push(dummy_data_buf_stmt.clone());
+        safe_block.push(dummy_data_buf_stmt);
+
+        let dummy_output_buf_stmt = self.gen_dummy_stmt("dummy_output_var", "output_buf");
+        block.push(dummy_output_buf_stmt.clone());
+        safe_block.push(dummy_output_buf_stmt);
 
         let mut num_workgroups =
             FnInput::new("num_workgroups", DataType::Vector(3, ScalarType::U32));
@@ -511,8 +512,22 @@ impl<'a> Generator<'a> {
                 num_uninit_vars: self.options.uninit_vars,
                 safe_vars: self.safe_vars.clone(),
                 race_val_strat: self.options.race_val_strat,
+                data_buf_size: self.options.data_buf_size,
+                pattern_slots: self.options.pattern_slots
             },
         }
+    }
+
+    fn gen_dummy_stmt(&mut self, dummy_var: impl Into<String>, buf: impl Into<String>) -> Statement {
+      let index = Postfix::index(Lit::U32(0));
+      let arr_expr = VarExpr::new(buf).into_node(DataType::Ref(MemoryViewType::new(
+          DataType::array(ScalarType::U32, None),
+          StorageClass::Storage,
+      )));
+      VarDeclStatement::new(
+        dummy_var,
+        Some(ScalarType::U32.into()),
+        Some(PostfixExpr::new(arr_expr, index).into())).into()
     }
 
     fn initialize_var(&mut self, name: String) -> Statement {
@@ -1088,7 +1103,7 @@ impl<'a> Generator<'a> {
 
         // (index_buf[pattern_index + c] < total_ids)
 
-        // Handoff: index_buf[(id.x * prime number) % total_pattern_slots] = pattern_index + c + 256
+        // Handoff: index_buf[((id.x  + offset) % total_ids) * pattern_slots + c] =  id.x * pattern_slots + data_buf_size;
         let handoff = AssignmentStatement::new(
             AssignmentLhs::array_index(
                 "index_buf",
@@ -1108,7 +1123,7 @@ impl<'a> Generator<'a> {
                                     .into_node(DataType::from(ScalarType::U32)),
                                 Lit::U32(8),
                             ),
-                            VarExpr::new("total_pattern_slots")
+                            VarExpr::new("total_ids")
                                 .into_node(DataType::from(ScalarType::U32)),
                         ),
                         Lit::U32(self.options.pattern_slots),

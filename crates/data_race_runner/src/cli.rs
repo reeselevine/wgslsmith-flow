@@ -97,13 +97,21 @@ fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo, size: u32
     },
     None => {
       // if no input passed, initialize all data to 1 (2 if using even strategy)
-        let random_data: Vec<u8> = match data_race_info.race_val_strat {
-          Some(RaceValueStrategy::Even) => (0..size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
-          None => (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
-        };
+      let random_data: Vec<u8> = match data_race_info.race_val_strat {
+        Some(RaceValueStrategy::Even) => (0..size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
+        None => (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
+      };
+      let pattern_data_buffer: Vec<u8> = (0..(data_race_info.data_buf_size * 4)).map(
+        |i| if i % 4  == 0 { 1 } else { 0 } ).collect();
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
       map.insert("0:1".to_owned(), BufferInitInfo::Size { size: data_race_info.num_uninit_vars * options.workgroups * options.workgroup_size * 4});
+      map.insert("0:2".to_owned(), BufferInitInfo::Size {
+        size: options.workgroup_size * options.workgroups * data_race_info.pattern_slots * 4}); // index pattern buffer
+      map.insert("0:3".to_owned(), BufferInitInfo::Data {data: pattern_data_buffer}); // data pattern buffer
+      map.insert("0:4".to_owned(), BufferInitInfo::Size {
+          size: options.workgroup_size * options.workgroups * data_race_info.pattern_slots * 4}); // output pattern buffer
+
       Ok(map)
     }
   }

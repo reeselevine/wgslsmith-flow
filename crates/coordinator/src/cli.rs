@@ -210,9 +210,17 @@ pub fn run(options: Options) -> eyre::Result<()> {
           Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
           None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
         };
+        let pattern_data_buffer: Vec<u8> = (0..(gen_opts.data_buf_size * 4)).map(
+          |i| if i % 4  == 0 { 1 } else { 0 } ).collect();
         let mut input_info = HashMap::new();
-        input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
-        input_info.insert("0:1".to_owned(), BufferInitInfo::Size { size: gen_opts.workgroup_size * workgroups * gen_opts.uninit_vars * 4}); // size is in u8 (bytes)
+        input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data }); // mem buffer
+        input_info.insert("0:1".to_owned(), BufferInitInfo::Size { 
+          size: gen_opts.workgroup_size * workgroups * gen_opts.uninit_vars * 4}); // uninit vars buffer
+        input_info.insert("0:2".to_owned(), BufferInitInfo::Size {
+          size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4}); // index pattern buffer
+        input_info.insert("0:3".to_owned(), BufferInitInfo::Data {data: pattern_data_buffer}); // data pattern buffer
+        input_info.insert("0:4".to_owned(), BufferInitInfo::Size {
+          size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4}); // output pattern buffer
 
         let mut racy_buf = Vec::new();
         let racy_output: Box<dyn io::Write> = Box::new(&mut racy_buf);
