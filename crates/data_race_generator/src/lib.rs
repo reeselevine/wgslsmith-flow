@@ -8,8 +8,8 @@ use ast::{
     AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn,
     Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit,
     ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement,
-    Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, VarDeclStatement,
-    VarExpr, VarQualifier,
+    Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, TypeConsExpr,
+    VarDeclStatement, VarExpr, VarQualifier,
 };
 
 use rand::distributions::WeightedIndex;
@@ -30,6 +30,13 @@ enum AccessType {
     Literal,
 }
 
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+enum RacePatternType {
+    Basic,
+    IntegerOverflow,
+    DivideByZero,
+}
+
 #[derive(Serialize, Deserialize, Debug, ArgEnum, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum RaceValueStrategy {
@@ -46,7 +53,7 @@ pub struct DataRaceInfo {
     pub safe_vars: Vec<String>,
     pub race_val_strat: Option<RaceValueStrategy>,
     pub data_buf_size: u32,
-    pub pattern_slots: u32
+    pub pattern_slots: u32,
 }
 
 pub struct Shaders {
@@ -101,6 +108,8 @@ pub struct Generator<'a> {
     lhs_weights: WeightedIndex<i32>,
     racy_lhs_access_types: Vec<AccessType>,
     racy_lhs_weights: WeightedIndex<i32>,
+    pattern_types: Vec<RacePatternType>,
+    pattern_type_weights: WeightedIndex<i32>,
     pattern_slots_used: u32,
 }
 
@@ -120,8 +129,8 @@ const RACY_ACCESS_TYPES: [AccessType; 4] = [
 
 pub struct StatementGenInfo {
     pub generated_statements: u32,
-    pub statement: Statement,
-    pub safe_statement: Option<Statement>,
+    pub statements: Vec<Statement>,
+    pub safe_statements: Option<Vec<Statement>>,
 }
 
 impl<'a> Generator<'a> {
@@ -231,6 +240,13 @@ impl<'a> Generator<'a> {
         let safe_rhs_weights = WeightedIndex::new(safe_rhs_weight_values)
             .unwrap_or(WeightedIndex::new(vec![1]).unwrap());
 
+        let pattern_types = vec![
+            RacePatternType::Basic,
+            RacePatternType::IntegerOverflow,
+            RacePatternType::DivideByZero,
+        ];
+        let pattern_weights = WeightedIndex::new(vec![34, 33, 33]).unwrap();
+
         Generator {
             rng,
             options,
@@ -250,8 +266,9 @@ impl<'a> Generator<'a> {
             lhs_weights,
             racy_lhs_access_types,
             racy_lhs_weights,
+            pattern_types: pattern_types,
+            pattern_type_weights: pattern_weights,
             pattern_slots_used: 0,
-            //curr_loop_var: 0,
         }
     }
 
@@ -340,7 +357,7 @@ impl<'a> Generator<'a> {
                     access_mode: Some(AccessMode::ReadWrite),
                 }),
                 name: "index_buf".to_owned(),
-                data_type: DataType::array(ScalarType::U32, None),
+                data_type: DataType::array(ScalarType::I32, None),
                 initializer: None,
             },
             GlobalVarDecl {
@@ -418,10 +435,10 @@ impl<'a> Generator<'a> {
         while stmts_left > 0 {
             let gen_info = self.gen_statement(stmts_left, 0, false);
 
-            block.push(gen_info.statement.clone());
-            match gen_info.safe_statement {
-                Some(stmt) => {
-                    safe_block.push(stmt.clone());
+            block.extend(gen_info.statements.iter().cloned());
+            match gen_info.safe_statements {
+                Some(stmts) => {
+                    safe_block.extend(stmts.iter().cloned());
                 }
                 None => {}
             }
@@ -443,15 +460,18 @@ impl<'a> Generator<'a> {
         block.push(dummy_mem_stmt.clone().into());
         safe_block.push(dummy_mem_stmt.into());
 
-        let dummy_index_buf_stmt = self.gen_dummy_stmt("dummy_index_var", "index_buf");
+        let dummy_index_buf_stmt =
+            self.gen_dummy_stmt("dummy_index_var", "index_buf", ScalarType::I32);
         block.push(dummy_index_buf_stmt.clone());
         safe_block.push(dummy_index_buf_stmt);
 
-        let dummy_data_buf_stmt = self.gen_dummy_stmt("dummy_data_var", "data_buf");
+        let dummy_data_buf_stmt =
+            self.gen_dummy_stmt("dummy_data_var", "data_buf", ScalarType::U32);
         block.push(dummy_data_buf_stmt.clone());
         safe_block.push(dummy_data_buf_stmt);
 
-        let dummy_output_buf_stmt = self.gen_dummy_stmt("dummy_output_var", "output_buf");
+        let dummy_output_buf_stmt =
+            self.gen_dummy_stmt("dummy_output_var", "output_buf", ScalarType::U32);
         block.push(dummy_output_buf_stmt.clone());
         safe_block.push(dummy_output_buf_stmt);
 
@@ -513,21 +533,28 @@ impl<'a> Generator<'a> {
                 safe_vars: self.safe_vars.clone(),
                 race_val_strat: self.options.race_val_strat,
                 data_buf_size: self.options.data_buf_size,
-                pattern_slots: self.options.pattern_slots
+                pattern_slots: self.options.pattern_slots,
             },
         }
     }
 
-    fn gen_dummy_stmt(&mut self, dummy_var: impl Into<String>, buf: impl Into<String>) -> Statement {
-      let index = Postfix::index(Lit::U32(0));
-      let arr_expr = VarExpr::new(buf).into_node(DataType::Ref(MemoryViewType::new(
-          DataType::array(ScalarType::U32, None),
-          StorageClass::Storage,
-      )));
-      VarDeclStatement::new(
-        dummy_var,
-        Some(ScalarType::U32.into()),
-        Some(PostfixExpr::new(arr_expr, index).into())).into()
+    fn gen_dummy_stmt(
+        &mut self,
+        dummy_var: impl Into<String>,
+        buf: impl Into<String>,
+        data_type: ScalarType,
+    ) -> Statement {
+        let index = Postfix::index(Lit::U32(0));
+        let arr_expr = VarExpr::new(buf).into_node(DataType::Ref(MemoryViewType::new(
+            DataType::array(data_type, None),
+            StorageClass::Storage,
+        )));
+        VarDeclStatement::new(
+            dummy_var,
+            Some(data_type.into()),
+            Some(PostfixExpr::new(arr_expr, index).into()),
+        )
+        .into()
     }
 
     fn initialize_var(&mut self, name: String) -> Statement {
@@ -769,14 +796,14 @@ impl<'a> Generator<'a> {
             .into(),
         };
         let safe_stmt_opt = if SAFE_ACCESS_TYPES.contains(&lhs_access_type) {
-            Some(stmt.clone())
+            Some(vec![stmt.clone()])
         } else {
             None
         };
         StatementGenInfo {
             generated_statements: 1,
-            statement: stmt,
-            safe_statement: safe_stmt_opt,
+            statements: vec![stmt],
+            safe_statements: safe_stmt_opt,
         }
     }
 
@@ -835,9 +862,9 @@ impl<'a> Generator<'a> {
 
         while num_statements > 0 {
             let gen_info = self.gen_statement(num_statements, nest_level, cur_block_racy);
-            race_if_stmts.push(gen_info.statement);
-            match gen_info.safe_statement {
-                Some(stmt) => safe_if_stmts.push(stmt),
+            race_if_stmts.extend(gen_info.statements.iter().cloned());
+            match gen_info.safe_statements {
+                Some(stmts) => safe_if_stmts.extend(stmts.iter().cloned()),
                 None => {}
             };
             num_statements -= gen_info.generated_statements;
@@ -859,9 +886,9 @@ impl<'a> Generator<'a> {
 
             while num_else_statements > 0 {
                 let gen_info = self.gen_statement(num_else_statements, nest_level, cur_block_racy);
-                race_else_stmts.push(gen_info.statement);
-                match gen_info.safe_statement {
-                    Some(stmt) => safe_else_stmts.push(stmt),
+                race_else_stmts.extend(gen_info.statements.iter().cloned());
+                match gen_info.safe_statements {
+                    Some(stmts) => safe_else_stmts.extend(stmts.iter().cloned()),
                     None => {}
                 };
                 num_else_statements -= gen_info.generated_statements;
@@ -872,23 +899,23 @@ impl<'a> Generator<'a> {
             let safe_stmt_opt = if cur_block_racy {
                 None
             } else {
-                Some(Statement::If(safe_if_else))
+                Some(vec![Statement::If(safe_if_else)])
             };
             StatementGenInfo {
                 generated_statements: generated_statements, // statements in each block plus 1 for the if condition
-                statement: Statement::If(race_if_else),
-                safe_statement: safe_stmt_opt,
+                statements: vec![Statement::If(race_if_else)],
+                safe_statements: safe_stmt_opt,
             }
         } else {
             let safe_stmt_opt = if cur_block_racy {
                 None
             } else {
-                Some(Statement::If(safe_if_stmt))
+                Some(vec![Statement::If(safe_if_stmt)])
             };
             StatementGenInfo {
                 generated_statements: generated_statements, // statements in the if block plus 1 for the if condition
-                statement: Statement::If(race_if_stmt),
-                safe_statement: safe_stmt_opt,
+                statements: vec![Statement::If(race_if_stmt)],
+                safe_statements: safe_stmt_opt,
             }
         }
     }
@@ -945,9 +972,9 @@ impl<'a> Generator<'a> {
 
         while num_statements > 0 {
             let gen_info = self.gen_statement(num_statements, nest_level, cur_block_racy);
-            race_for_stmts.push(gen_info.statement);
-            match gen_info.safe_statement {
-                Some(stmt) => safe_for_stmts.push(stmt),
+            race_for_stmts.extend(gen_info.statements.iter().cloned());
+            match gen_info.safe_statements {
+                Some(stmts) => safe_for_stmts.extend(stmts.iter().cloned()),
                 None => {}
             };
             num_statements -= gen_info.generated_statements;
@@ -959,12 +986,12 @@ impl<'a> Generator<'a> {
         let safe_stmt_opt = if cur_block_racy {
             None
         } else {
-            Some(Statement::ForLoop(safe_for_stmt))
+            Some(vec![Statement::ForLoop(safe_for_stmt)])
         };
         StatementGenInfo {
             generated_statements: generated_statements, // statements in the block plus 1 for the initializer
-            statement: Statement::ForLoop(race_for_stmt),
-            safe_statement: safe_stmt_opt,
+            statements: vec![Statement::ForLoop(race_for_stmt)],
+            safe_statements: safe_stmt_opt,
         }
     }
 
@@ -998,6 +1025,8 @@ impl<'a> Generator<'a> {
             return self.gen_statement(stmts_left, nest_level, racy_block);
         }
 
+        let pattern_type = self.pattern_types[self.pattern_type_weights.sample(self.rng)];
+
         let c = self.pattern_slots_used;
 
         self.pattern_slots_used += 1;
@@ -1007,7 +1036,7 @@ impl<'a> Generator<'a> {
             AssignmentLhs::array_index(
                 "index_buf",
                 DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
+                    DataType::array(ScalarType::I32, None),
                     StorageClass::Storage,
                 )),
                 BinOpExpr::new(
@@ -1018,7 +1047,7 @@ impl<'a> Generator<'a> {
                 .into(),
             ),
             AssignmentOp::Simple,
-            Lit::U32(self.rng.gen_range(0..=2)),
+            Lit::I32(self.rng.gen_range(0..=2)),
         );
 
         let mut if_body_stmts: Vec<Statement> = Vec::new();
@@ -1045,17 +1074,7 @@ impl<'a> Generator<'a> {
                     DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 ))),
-                Postfix::index(PostfixExpr::new(
-                    VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
-                        DataType::array(ScalarType::U32, None),
-                        StorageClass::Storage,
-                    ))),
-                    Postfix::index(BinOpExpr::new(
-                        BinOp::Plus,
-                        VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                        Lit::U32(c),
-                    )),
-                )),
+                self.gen_pattern_race_stmt(pattern_type, c),
             ),
         );
 
@@ -1069,7 +1088,7 @@ impl<'a> Generator<'a> {
 
         while num_statements > 0 {
             let gen_info = self.gen_statement(num_statements, nest_level, true);
-            if_body_stmts.push(gen_info.statement);
+            if_body_stmts.extend(gen_info.statements.iter().cloned());
             num_statements -= gen_info.generated_statements;
         }
 
@@ -1092,7 +1111,7 @@ impl<'a> Generator<'a> {
                             Lit::U32(c),
                         )),
                     ),
-                    Lit::U32(self.options.data_buf_size),
+                    Lit::I32(self.options.data_buf_size.try_into().unwrap()),
                 ),
                 if_body_stmts.clone(),
             );
@@ -1123,8 +1142,7 @@ impl<'a> Generator<'a> {
                                     .into_node(DataType::from(ScalarType::U32)),
                                 Lit::U32(8),
                             ),
-                            VarExpr::new("total_ids")
-                                .into_node(DataType::from(ScalarType::U32)),
+                            VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)),
                         ),
                         Lit::U32(self.options.pattern_slots),
                     ),
@@ -1133,15 +1151,7 @@ impl<'a> Generator<'a> {
                 .into(),
             ),
             AssignmentOp::Simple,
-            BinOpExpr::new(
-                BinOp::Plus,
-                  BinOpExpr::new(
-                    BinOp::Times,
-                  VarExpr::new("global_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
-                  Lit::U32(self.pattern_slots_used)
-                ),
-                Lit::U32(self.options.data_buf_size),
-            ),
+            self.gen_pattern_race_val(pattern_type),
         );
 
         pattern_stmts.insert(0, assign.into());
@@ -1149,8 +1159,55 @@ impl<'a> Generator<'a> {
 
         StatementGenInfo {
             generated_statements: generated_statements,
-            statement: pattern_stmts.into(),
-            safe_statement: None,
+            statements: pattern_stmts.into(),
+            safe_statements: None,
+        }
+    }
+
+    fn gen_pattern_race_stmt(&mut self, pattern_type: RacePatternType, offset: u32) -> Postfix {
+        let base = PostfixExpr::new(
+            VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                StorageClass::Storage,
+            ))),
+            Postfix::index(BinOpExpr::new(
+                BinOp::Plus,
+                VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                Lit::U32(offset),
+            )),
+        );
+        let postfix_expr: ExprNode = match pattern_type {
+            RacePatternType::Basic => base.into(),
+            RacePatternType::IntegerOverflow => BinOpExpr::new(
+              BinOp::Times,
+              base,
+              Lit::I32(4)).into(),
+            RacePatternType::DivideByZero => BinOpExpr::new(
+              BinOp::Divide,
+              Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
+              base).into()
+        };
+        Postfix::index(postfix_expr)
+    }
+
+    fn gen_pattern_race_val(&mut self, pattern_type: RacePatternType) -> ExprNode {
+        match pattern_type {
+            RacePatternType::Basic => BinOpExpr::new(
+                BinOp::Plus,
+                BinOpExpr::new(
+                    BinOp::Times,
+                    TypeConsExpr::new(
+                        ScalarType::I32.into(),
+                        vec![VarExpr::new("global_invocation_id.x")
+                            .into_node(DataType::from(ScalarType::I32))],
+                    ),
+                    Lit::I32(self.pattern_slots_used.try_into().unwrap()),
+                ),
+                Lit::I32(self.options.data_buf_size.try_into().unwrap()),
+            )
+            .into(),
+            RacePatternType::IntegerOverflow => Lit::I32(1000000000).into(),
+            RacePatternType::DivideByZero => Lit::I32(0).into(),
         }
     }
 }
