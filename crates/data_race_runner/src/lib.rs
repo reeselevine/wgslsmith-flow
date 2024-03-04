@@ -25,7 +25,8 @@ pub enum Expected {
 pub enum MismatchType {
   ConstantLocation,
   SafeLocation,
-  UninitializedVar
+  UninitializedVar,
+  OOBRead,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +72,14 @@ pub fn execute(
 
             let safe_uninit_array = u8s_to_u32s(&safe_output[1]);
             let race_uninit_array = u8s_to_u32s(&race_output[1]);
+
+            //let index_buf_output = u8s_to_u32s(&race_output[2]);
+            //let data_buf_output = u8s_to_u32s(&race_output[3]);
+            let race_pattern_output = u8s_to_u32s(&race_output[4]);
+
+            //println!("{:?}", index_buf_output);
+            //println!("{:?}", data_buf_output);
+            //println!("{:?}", race_pattern_output);
 
             for const_index in 0..data_race_info.constant_locs {
                 let index: usize = usize::try_from(const_index).unwrap();
@@ -131,6 +140,22 @@ pub fn execute(
                       index: u32::try_from(ind).unwrap(),
                       expected: Expected::Value(0),
                       actual: race_uninit_array[ind],
+                    });
+                  }
+                }
+
+                for offset in 0..data_race_info.pattern_slots {
+                  let ind: usize = usize::try_from(
+                    thread_id * data_race_info.pattern_slots + offset).unwrap();
+                  if race_pattern_output[ind] > 1 {
+                    mismatches.push(Mismatch {
+                      config: config.clone(),
+                      rep,
+                      mismatch_type: MismatchType::OOBRead,
+                      thread: Some(thread_id),
+                      index: u32::try_from(ind).unwrap(),
+                      expected: Expected::Value(1),
+                      actual: race_pattern_output[ind],
                     });
                   }
                 }
