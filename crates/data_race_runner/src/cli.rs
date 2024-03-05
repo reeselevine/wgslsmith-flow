@@ -11,7 +11,7 @@ use eyre::{eyre, Context};
 
 use std::collections::HashMap;
 
-use crate::ExecOptions;
+use crate::{ExecOptions, MismatchType};
 
 #[derive(Parser)]
 pub struct RunOptions {
@@ -50,8 +50,11 @@ pub struct RunOptions {
 
     /// Number of times to run the shaders 
     #[clap(long, action, default_value = "1")]
-    pub reps: u32
+    pub reps: u32,
 
+    /// The mismatch types to check 
+    #[clap(long, action)]
+    pub check_mismatches: Vec<MismatchType>,
 }
 
 pub fn run(options: RunOptions) -> eyre::Result<()> {
@@ -63,6 +66,13 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     };
     print_configs(&configs);
 
+    // Default to all mismatch types
+    let mismatches_to_check = if options.check_mismatches.len() == 0 {
+      vec![MismatchType::ConstantLocation, MismatchType::SafeLocation, MismatchType::UninitializedVar, MismatchType::OobRead]
+    } else {
+      options.check_mismatches.clone()
+    };
+
     let safe_shader = read_shader_from_path(&options.safe_shader)?;
     let racy_shader = read_shader_from_path(&options.racy_shader)?;
     let data_race_info: DataRaceInfo = serde_json::from_reader(File::open(&options.data_race_info)?)?;
@@ -72,7 +82,8 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
       configs,
       workgroups: options.workgroups,
       workgroup_size: options.workgroup_size,
-      reps: options.reps
+      reps: options.reps,
+      check_mismatches: mismatches_to_check
     };
 
     let result = crate::execute(racy_shader, safe_shader, &data_race_info, &input_data, exec_options);

@@ -1,6 +1,7 @@
 use colored::Colorize;
 use data_race_generator::GenOptions;
 use data_race_generator::RaceValueStrategy;
+use data_race_runner::MismatchType;
 use rand::thread_rng;
 use reflection_types::BufferInitInfo;
 use serde_json::to_string;
@@ -130,6 +131,9 @@ pub struct Options {
     #[clap(long, action, default_value = "3")]
     pub pattern_slots: u32,
 
+    /// The mismatch types to check 
+    #[clap(long, action)]
+    pub check_mismatches: Vec<MismatchType>,
 }
 
 fn random_opts(disable_oob: bool) -> GenOptions {
@@ -171,6 +175,13 @@ pub fn run(options: Options) -> eyre::Result<()> {
         options.configs.clone()
     };
     print_configs(&configs);
+
+    // Default to all mismatch types
+    let mismatches_to_check = if options.check_mismatches.len() == 0 {
+      vec![MismatchType::ConstantLocation, MismatchType::SafeLocation, MismatchType::UninitializedVar, MismatchType::OobRead]
+    } else {
+      options.check_mismatches.clone()
+    };
 
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
@@ -237,6 +248,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
             workgroups: workgroups,
             workgroup_size: gen_opts.workgroup_size,
             reps: options.config_rep,
+            check_mismatches: mismatches_to_check.clone()
         };
 
         let mismatches = data_race_runner::execute(

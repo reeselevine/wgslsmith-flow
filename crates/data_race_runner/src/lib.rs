@@ -1,11 +1,11 @@
 pub mod cli;
 
-use std::{collections::HashMap, io::Cursor};
-
+use clap::clap_derive::ArgEnum;
 use data_race_generator::{DataRaceInfo, RaceValueStrategy};
 use reflection::PipelineDescription;
 use reflection_types::BufferInitInfo;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, io::Cursor};
 use types::ConfigId;
 
 pub struct ExecOptions {
@@ -13,6 +13,7 @@ pub struct ExecOptions {
     pub workgroups: u32,
     pub workgroup_size: u32,
     pub reps: u32,
+    pub check_mismatches: Vec<MismatchType>,
 }
 
 #[derive(Debug, Serialize)]
@@ -21,12 +22,13 @@ pub enum Expected {
     Strategy(RaceValueStrategy),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize, Deserialize, Debug, ArgEnum, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum MismatchType {
-  ConstantLocation,
-  SafeLocation,
-  UninitializedVar,
-  OOBRead,
+    ConstantLocation,
+    SafeLocation,
+    UninitializedVar,
+    OobRead,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,119 +83,139 @@ pub fn execute(
             //println!("{:?}", data_buf_output);
             //println!("{:?}", race_pattern_output);
 
-            for const_index in 0..data_race_info.constant_locs {
-                let index: usize = usize::try_from(const_index).unwrap();
-                if data_race_info.safe_constants.contains(&const_index) {
-                    if safe_array[index] != race_array[index] {
-                        mismatches.push(Mismatch {
-                            config: config.clone(),
-                            rep,
-                            mismatch_type: MismatchType::ConstantLocation,
-                            thread: None,
-                            index: u32::try_from(index).unwrap(),
-                            expected: Expected::Value(safe_array[index]),
-                            actual: race_array[index],
-                        });
-                    }
-                }
-                match data_race_info.race_val_strat {
-                    Some(RaceValueStrategy::Even) => {
-                        if race_array[index] % 2 != 0 {
+            if exec_options
+                .check_mismatches
+                .contains(&MismatchType::ConstantLocation)
+            {
+                for const_index in 0..data_race_info.constant_locs {
+                    let index: usize = usize::try_from(const_index).unwrap();
+                    if data_race_info.safe_constants.contains(&const_index) {
+                        if safe_array[index] != race_array[index] {
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,
                                 mismatch_type: MismatchType::ConstantLocation,
                                 thread: None,
                                 index: u32::try_from(index).unwrap(),
-                                expected: Expected::Strategy(RaceValueStrategy::Even),
+                                expected: Expected::Value(safe_array[index]),
                                 actual: race_array[index],
                             });
                         }
                     }
-                    None => {}
+                    match data_race_info.race_val_strat {
+                        Some(RaceValueStrategy::Even) => {
+                            if race_array[index] % 2 != 0 {
+                                mismatches.push(Mismatch {
+                                    config: config.clone(),
+                                    rep,
+                                    mismatch_type: MismatchType::ConstantLocation,
+                                    thread: None,
+                                    index: u32::try_from(index).unwrap(),
+                                    expected: Expected::Strategy(RaceValueStrategy::Even),
+                                    actual: race_array[index],
+                                });
+                            }
+                        }
+                        None => {}
+                    }
                 }
             }
 
             let num_threads = exec_options.workgroups * exec_options.workgroup_size;
 
             for thread_id in 0..num_threads {
-                for offset in 0..data_race_info.num_uninit_vars {
-                  let ind: usize = usize::try_from(
-                    thread_id * data_race_info.num_uninit_vars + offset).unwrap();
-                  if safe_uninit_array[ind] != 0 {
-                    mismatches.push(Mismatch {
-                      config: config.clone(),
-                      rep,
-                      mismatch_type: MismatchType::UninitializedVar,
-                      thread: Some(thread_id),
-                      index: u32::try_from(ind).unwrap(),
-                      expected: Expected::Value(0),
-                      actual: safe_uninit_array[ind],
-                    });
-                  }
-                  if race_uninit_array[ind] != 0 {
-                    mismatches.push(Mismatch {
-                      config: config.clone(),
-                      rep,
-                      mismatch_type: MismatchType::UninitializedVar,
-                      thread: Some(thread_id),
-                      index: u32::try_from(ind).unwrap(),
-                      expected: Expected::Value(0),
-                      actual: race_uninit_array[ind],
-                    });
-                  }
-                }
-
-                for offset in 0..data_race_info.pattern_slots {
-                  let ind: usize = usize::try_from(
-                    thread_id * data_race_info.pattern_slots + offset).unwrap();
-                  if race_pattern_output[ind] > 1 {
-                    mismatches.push(Mismatch {
-                      config: config.clone(),
-                      rep,
-                      mismatch_type: MismatchType::OOBRead,
-                      thread: Some(thread_id),
-                      index: u32::try_from(ind).unwrap(),
-                      expected: Expected::Value(1),
-                      actual: race_pattern_output[ind],
-                    });
-                  }
-                }
-
-                for offset in 0..data_race_info.locs_per_thread {
-                    let ind: usize = usize::try_from(
-                        ((thread_id * data_race_info.locs_per_thread) + offset)
-                            + data_race_info.constant_locs,
-                    )
-                    .unwrap();
-                    if data_race_info.safe.contains(&offset) {
-                        if safe_array[ind] != race_array[ind] {
+                if exec_options
+                    .check_mismatches
+                    .contains(&MismatchType::UninitializedVar)
+                {
+                    for offset in 0..data_race_info.num_uninit_vars {
+                        let ind: usize =
+                            usize::try_from(thread_id * data_race_info.num_uninit_vars + offset)
+                                .unwrap();
+                        if safe_uninit_array[ind] != 0 {
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,
-                                mismatch_type: MismatchType::SafeLocation,
+                                mismatch_type: MismatchType::UninitializedVar,
                                 thread: Some(thread_id),
                                 index: u32::try_from(ind).unwrap(),
-                                expected: Expected::Value(safe_array[ind]),
-                                actual: race_array[ind],
+                                expected: Expected::Value(0),
+                                actual: safe_uninit_array[ind],
+                            });
+                        }
+                        if race_uninit_array[ind] != 0 {
+                            mismatches.push(Mismatch {
+                                config: config.clone(),
+                                rep,
+                                mismatch_type: MismatchType::UninitializedVar,
+                                thread: Some(thread_id),
+                                index: u32::try_from(ind).unwrap(),
+                                expected: Expected::Value(0),
+                                actual: race_uninit_array[ind],
                             });
                         }
                     }
-                    match data_race_info.race_val_strat {
-                        Some(RaceValueStrategy::Even) => {
-                            if race_array[ind] % 2 != 0 {
+                }
+                if exec_options
+                    .check_mismatches
+                    .contains(&MismatchType::OobRead)
+                {
+                    for offset in 0..data_race_info.pattern_slots {
+                        let ind: usize =
+                            usize::try_from(thread_id * data_race_info.pattern_slots + offset)
+                                .unwrap();
+                        if race_pattern_output[ind] > 1 {
+                            mismatches.push(Mismatch {
+                                config: config.clone(),
+                                rep,
+                                mismatch_type: MismatchType::OobRead,
+                                thread: Some(thread_id),
+                                index: u32::try_from(ind).unwrap(),
+                                expected: Expected::Value(1),
+                                actual: race_pattern_output[ind],
+                            });
+                        }
+                    }
+                }
+                if exec_options
+                    .check_mismatches
+                    .contains(&MismatchType::SafeLocation)
+                {
+                    for offset in 0..data_race_info.locs_per_thread {
+                        let ind: usize = usize::try_from(
+                            ((thread_id * data_race_info.locs_per_thread) + offset)
+                                + data_race_info.constant_locs,
+                        )
+                        .unwrap();
+                        if data_race_info.safe.contains(&offset) {
+                            if safe_array[ind] != race_array[ind] {
                                 mismatches.push(Mismatch {
                                     config: config.clone(),
                                     rep,
                                     mismatch_type: MismatchType::SafeLocation,
                                     thread: Some(thread_id),
                                     index: u32::try_from(ind).unwrap(),
-                                    expected: Expected::Strategy(RaceValueStrategy::Even),
+                                    expected: Expected::Value(safe_array[ind]),
                                     actual: race_array[ind],
                                 });
                             }
                         }
-                        None => {}
+                        match data_race_info.race_val_strat {
+                            Some(RaceValueStrategy::Even) => {
+                                if race_array[ind] % 2 != 0 {
+                                    mismatches.push(Mismatch {
+                                        config: config.clone(),
+                                        rep,
+                                        mismatch_type: MismatchType::SafeLocation,
+                                        thread: Some(thread_id),
+                                        index: u32::try_from(ind).unwrap(),
+                                        expected: Expected::Strategy(RaceValueStrategy::Even),
+                                        actual: race_array[ind],
+                                    });
+                                }
+                            }
+                            None => {}
+                        }
                     }
                 }
             }
@@ -202,7 +224,10 @@ pub fn execute(
     mismatches
 }
 
-fn reflect_shader(shader: &str, input_data: &HashMap<String, BufferInitInfo>) -> PipelineDescription {
+fn reflect_shader(
+    shader: &str,
+    input_data: &HashMap<String, BufferInitInfo>,
+) -> PipelineDescription {
     let module = parser::parse(shader);
 
     let (pipeline_desc, _) = reflection::reflect(&module, |resource| {
