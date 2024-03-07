@@ -60,6 +60,15 @@ extern "C" WGPUDevice create_device(
 
     if (!selectedAdapter) return nullptr;
 
+    const char* const enabledToggles[] = {"disable_robustness"};
+    WGPUDawnTogglesDescriptor deviceTogglesDesc;
+    deviceTogglesDesc.enabledToggles = enabledToggles;
+    deviceTogglesDesc.enabledToggleCount = 1;
+    deviceTogglesDesc.disabledToggleCount = 0;
+    deviceTogglesDesc.chain.next = nullptr;
+    deviceTogglesDesc.chain.sType = WGPUSType_DawnTogglesDescriptor;
+
     WGPUDeviceDescriptor descriptor = {};
+    descriptor.nextInChain = &deviceTogglesDesc.chain;
     return selectedAdapter->CreateDevice(&descriptor);
 }

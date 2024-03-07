@@ -71,10 +71,10 @@ pub async fn run(
     };
 
     let preprocessed = preprocessor::preprocess(preprocessor_opts, shader.to_owned());
-    let shader = device.create_shader_module(ShaderModuleDescriptor {
+    let shader = unsafe { device.create_shader_module_unchecked(ShaderModuleDescriptor {
         label: None,
         source: ShaderSource::Wgsl(Cow::Owned(preprocessed)),
-    });
+    }) };
 
     let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
         entry_point: "main",
