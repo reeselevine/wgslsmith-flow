@@ -18,6 +18,11 @@ use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 use std::cmp;
 
+const RACE_PATTERN_ADD_VAL: i32 = 512643019;
+const RACE_PATTERN_ADD_BASE: i32 = 1751312910;
+const RACE_PATTERN_MULT_VAL: i32 = 4;
+const RACE_PATTERN_MULT_BASE: i32 = 998768123;
+
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum AccessType {
     ThreadSafe,
@@ -33,7 +38,8 @@ enum AccessType {
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum RacePatternType {
     Basic,
-    IntegerOverflow,
+    IntegerOverflowMult,
+    IntegerOverflowAdd,
     DivideByZero,
 }
 
@@ -62,6 +68,10 @@ pub struct Shaders {
     pub info: DataRaceInfo,
 }
 
+pub struct GenFailure {
+    pub reason: String,
+}
+
 pub struct GenOptions {
     pub seed: u64,
     pub workgroup_size: u32,
@@ -87,6 +97,18 @@ pub struct GenOptions {
 pub fn gen(options: &GenOptions) -> Shaders {
     let mut rng = StdRng::seed_from_u64(options.seed);
     Generator::new(&mut rng, &options).gen_module()
+}
+
+pub fn gen_result(options: &GenOptions) -> Result<Shaders, GenFailure> {
+    let mut rng = StdRng::seed_from_u64(options.seed);
+    let mut generator = Generator::new(&mut rng, &options);
+    if generator.has_racy_access_types() {
+        Ok(generator.gen_module())
+    } else {
+        Err(GenFailure {
+            reason: "No racy access types generated".to_owned(),
+        })
+    }
 }
 
 pub struct Generator<'a> {
@@ -242,10 +264,11 @@ impl<'a> Generator<'a> {
 
         let pattern_types = vec![
             RacePatternType::Basic,
-            RacePatternType::IntegerOverflow,
+            RacePatternType::IntegerOverflowMult,
+            RacePatternType::IntegerOverflowAdd,
             RacePatternType::DivideByZero,
         ];
-        let pattern_weights = WeightedIndex::new(vec![34, 33, 33]).unwrap();
+        let pattern_weights = WeightedIndex::new(vec![33, 17, 17, 33]).unwrap();
 
         Generator {
             rng,
@@ -270,6 +293,10 @@ impl<'a> Generator<'a> {
             pattern_type_weights: pattern_weights,
             pattern_slots_used: 0,
         }
+    }
+
+    fn has_racy_access_types(&mut self) -> bool {
+        !self.racy_lhs_access_types.is_empty()
     }
 
     fn add_if_not_exists<T: PartialEq>(vector: &mut Vec<T>, value: T) {
@@ -1047,7 +1074,7 @@ impl<'a> Generator<'a> {
                 .into(),
             ),
             AssignmentOp::Simple,
-            Lit::I32(self.rng.gen_range(0..=2)),
+            Lit::I32(self.gen_pattern_init(pattern_type)),
         );
 
         let mut if_body_stmts: Vec<Statement> = Vec::new();
@@ -1079,9 +1106,9 @@ impl<'a> Generator<'a> {
         );
 
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
-        // used for the for the pattern)
+        // used for the pattern)
         let mut num_statements = cmp::min(
-            self.rng.gen_range(1..self.options.block_max_stmts),
+            self.rng.gen_range(1..self.options.block_max_stmts) - 1,
             stmts_left - 3,
         );
         let generated_statements = num_statements + 3;
@@ -1097,22 +1124,7 @@ impl<'a> Generator<'a> {
         // half the time we include an if statement as part of the pattern
         let mut pattern_stmts = if self.rng.gen_bool(0.5) {
             let if_stmt = IfStatement::new(
-                BinOpExpr::new(
-                    BinOp::Less,
-                    PostfixExpr::new(
-                        VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
-                            DataType::array(ScalarType::U32, None),
-                            StorageClass::Storage,
-                        ))),
-                        Postfix::index(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index")
-                                .into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c),
-                        )),
-                    ),
-                    Lit::I32(self.options.data_buf_size.try_into().unwrap()),
-                ),
+                self.gen_pattern_cond(pattern_type, c),
                 if_body_stmts.clone(),
             );
             vec![if_stmt.into()]
@@ -1178,14 +1190,18 @@ impl<'a> Generator<'a> {
         );
         let postfix_expr: ExprNode = match pattern_type {
             RacePatternType::Basic => base.into(),
-            RacePatternType::IntegerOverflow => BinOpExpr::new(
-              BinOp::Times,
-              base,
-              Lit::I32(4)).into(),
+            RacePatternType::IntegerOverflowMult => {
+                BinOpExpr::new(BinOp::Times, base, Lit::I32(RACE_PATTERN_MULT_VAL)).into()
+            }
+            RacePatternType::IntegerOverflowAdd => {
+                BinOpExpr::new(BinOp::Plus, base, Lit::I32(RACE_PATTERN_ADD_VAL)).into()
+            }
             RacePatternType::DivideByZero => BinOpExpr::new(
-              BinOp::Divide,
-              Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
-              base).into()
+                BinOp::Divide,
+                Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
+                base,
+            )
+            .into(),
         };
         Postfix::index(postfix_expr)
     }
@@ -1206,8 +1222,48 @@ impl<'a> Generator<'a> {
                 Lit::I32(self.options.data_buf_size.try_into().unwrap()),
             )
             .into(),
-            RacePatternType::IntegerOverflow => Lit::I32(1000000000).into(),
+            RacePatternType::IntegerOverflowMult => Lit::I32(RACE_PATTERN_MULT_BASE).into(),
+            RacePatternType::IntegerOverflowAdd => Lit::I32(RACE_PATTERN_ADD_BASE).into(),
             RacePatternType::DivideByZero => Lit::I32(0).into(),
+        }
+    }
+
+    fn gen_pattern_cond(&mut self, pattern_type: RacePatternType, offset: u32) -> BinOpExpr {
+        let index_buf_access = PostfixExpr::new(
+            VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                StorageClass::Storage,
+            ))),
+            Postfix::index(BinOpExpr::new(
+                BinOp::Plus,
+                VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                Lit::U32(offset),
+            )),
+        );
+        match pattern_type {
+            RacePatternType::Basic => BinOpExpr::new(
+                BinOp::Less,
+                index_buf_access,
+                Lit::I32(self.options.data_buf_size.try_into().unwrap())),
+            RacePatternType::IntegerOverflowMult => BinOpExpr::new(
+              BinOp::LessEqual,
+              index_buf_access,
+              Lit::I32(i32::MAX / 4)),
+            RacePatternType::IntegerOverflowAdd => BinOpExpr::new(
+              BinOp::LessEqual,
+              index_buf_access,
+              Lit::I32(i32::MAX - RACE_PATTERN_ADD_VAL)),
+            RacePatternType::DivideByZero => BinOpExpr::new(
+              BinOp::NotEqual,
+              index_buf_access,
+              Lit::I32(0))
+        }
+    }
+
+    fn gen_pattern_init(&mut self, pattern_type: RacePatternType) -> i32 {
+        match pattern_type {
+            RacePatternType::DivideByZero => self.rng.gen_range(1..=4),
+            _ => self.rng.gen_range(0..=4),
         }
     }
 }

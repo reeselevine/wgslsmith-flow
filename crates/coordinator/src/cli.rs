@@ -127,38 +127,46 @@ pub struct Options {
     #[clap(long, action, default_value = "256")]
     pub data_buf_size: u32,
 
-    /// Number of pattern slots 
+    /// Number of pattern slots
     #[clap(long, action, default_value = "3")]
     pub pattern_slots: u32,
 
-    /// The mismatch types to check 
+    /// The mismatch types to check
     #[clap(long, action)]
     pub check_mismatches: Vec<MismatchType>,
 }
 
 fn random_opts(disable_oob: bool) -> GenOptions {
-  let mut rng = thread_rng();
-  GenOptions {
-    seed: rng.gen_range(0..=18446744073709551615),
-    workgroup_size: rng.gen_range(1..=128),
-    racy_loc_pct: rng.gen_range(0..=100),
-    racy_constant_loc_pct: rng.gen_range(0..=100),
-    racy_var_pct: rng.gen_range(0..=100),
-    block_max_stmts: rng.gen_range(2..=100),
-    block_max_nest_level: 3,
-    else_chance: rng.gen_range(0..=100),
-    max_loop_iter: 10,
-    num_lits: rng.gen_range(1..=16),
-    stmts: rng.gen_range(0..=1000),
-    vars: rng.gen_range(1..=16),
-    uninit_vars: rng.gen_range(1..=16),
-    locs_per_thread: rng.gen_range(1..=16),
-    constant_locs: rng.gen_range(1..=16),
-    oob_pct: if disable_oob { 0} else { rng.gen_range(0..=100) },
-    race_val_strat: if rng.gen_range(0..=100) > 50 { None } else { Some(RaceValueStrategy::Even) },
-    data_buf_size: rng.gen_range(32..=1024),
-    pattern_slots: rng.gen_range(1..=5)
-  } 
+    let mut rng = thread_rng();
+    GenOptions {
+        seed: rng.gen_range(0..=18446744073709551615),
+        workgroup_size: rng.gen_range(1..=128),
+        racy_loc_pct: rng.gen_range(0..=100),
+        racy_constant_loc_pct: rng.gen_range(0..=100),
+        racy_var_pct: rng.gen_range(0..=100),
+        block_max_stmts: rng.gen_range(2..=100),
+        block_max_nest_level: 3,
+        else_chance: rng.gen_range(0..=100),
+        max_loop_iter: 10,
+        num_lits: rng.gen_range(1..=16),
+        stmts: rng.gen_range(0..=1000),
+        vars: rng.gen_range(1..=16),
+        uninit_vars: rng.gen_range(1..=16),
+        locs_per_thread: rng.gen_range(1..=16),
+        constant_locs: rng.gen_range(1..=16),
+        oob_pct: if disable_oob {
+            0
+        } else {
+            rng.gen_range(0..=100)
+        },
+        race_val_strat: if rng.gen_range(0..=100) > 50 {
+            None
+        } else {
+            Some(RaceValueStrategy::Even)
+        },
+        data_buf_size: rng.gen_range(32..=1024),
+        pattern_slots: rng.gen_range(1..=5),
+    }
 }
 
 pub fn run(options: Options) -> eyre::Result<()> {
@@ -178,123 +186,163 @@ pub fn run(options: Options) -> eyre::Result<()> {
 
     // Default to all mismatch types
     let mismatches_to_check = if options.check_mismatches.len() == 0 {
-      vec![MismatchType::ConstantLocation, MismatchType::SafeLocation, MismatchType::UninitializedVar, MismatchType::OobRead]
+        vec![
+            MismatchType::ConstantLocation,
+            MismatchType::SafeLocation,
+            MismatchType::UninitializedVar,
+            MismatchType::OobRead,
+        ]
     } else {
-      options.check_mismatches.clone()
+        options.check_mismatches.clone()
     };
 
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
         let gen_opts = if options.random_opts {
-          random_opts(options.disable_oob)
+            random_opts(options.disable_oob)
         } else {
-          GenOptions {
-            seed: OsRng.gen(),
-            workgroup_size: options.workgroup_size,
-            racy_loc_pct: options.racy_loc_pct,
-            racy_constant_loc_pct: options.racy_constant_loc_pct,
-            racy_var_pct: options.racy_var_pct,
-            block_max_stmts: options.block_max_stmts,
-            block_max_nest_level: options.block_max_nest_level,
-            else_chance: options.else_chance,
-            max_loop_iter: options.max_loop_iter,
-            num_lits: options.num_lits,
-            stmts: options.stmts,
-            vars: options.vars,
-            uninit_vars: options.uninit_vars,
-            locs_per_thread: options.locs_per_thread,
-            constant_locs: options.constant_locs,
-            race_val_strat: options.race_value_strategy,
-            oob_pct: options.oob_pct,
-            data_buf_size: options.data_buf_size,
-            pattern_slots: options.pattern_slots
-          }
-        };
-
-        let workgroups = if options.random_opts { thread_rng().gen_range(1..=128) } else { options.workgroups };
-
-        let shaders = data_race_generator::gen(&gen_opts);
-        let input_size = ((gen_opts.workgroup_size * workgroups * gen_opts.locs_per_thread)
-            + gen_opts.constant_locs)
-            * 4; // Mult by 4 since u8
-        let random_data: Vec<u8> = match shaders.info.race_val_strat {
-          Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
-          None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
-        };
-        let pattern_data_buffer: Vec<u8> = (0..(gen_opts.data_buf_size * 4)).map(
-          |i| if i % 4  == 0 { 1 } else { 0 } ).collect();
-        let mut input_info = HashMap::new();
-        input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data }); // mem buffer
-        input_info.insert("0:1".to_owned(), BufferInitInfo::Size { 
-          size: gen_opts.workgroup_size * workgroups * gen_opts.uninit_vars * 4}); // uninit vars buffer
-        input_info.insert("0:2".to_owned(), BufferInitInfo::Size {
-          size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4}); // index pattern buffer
-        input_info.insert("0:3".to_owned(), BufferInitInfo::Data {data: pattern_data_buffer}); // data pattern buffer
-        input_info.insert("0:4".to_owned(), BufferInitInfo::Size {
-          size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4}); // output pattern buffer
-
-        let mut racy_buf = Vec::new();
-        let racy_output: Box<dyn io::Write> = Box::new(&mut racy_buf);
-        ast::writer::Writer::default().write_module_default(racy_output, &shaders.race)?;
-        let racy_shader = String::from_utf8(racy_buf)?;
-
-        let mut safe_buf = Vec::new();
-        let safe_output: Box<dyn io::Write> = Box::new(&mut safe_buf);
-        ast::writer::Writer::default().write_module_default(safe_output, &shaders.safe)?;
-        let safe_shader = String::from_utf8(safe_buf)?;
-
-        let exec_options = data_race_runner::ExecOptions {
-            configs: configs.clone(),
-            workgroups: workgroups,
-            workgroup_size: gen_opts.workgroup_size,
-            reps: options.config_rep,
-            check_mismatches: mismatches_to_check.clone()
-        };
-
-        let mismatches = data_race_runner::execute(
-            racy_shader,
-            safe_shader,
-            &shaders.info,
-            &input_info,
-            exec_options,
-        );
-
-        if mismatches.len() == 0 {
-            println!("Iteration {}: {}", iteration, "Configs match".green());
-        } else {
-            println!("Iteration {}: {}", iteration, "Configs mismatch".red());
-
-            let folder_path = options.target.clone() + &"/".to_owned() + &iteration.to_string();
-            fs::create_dir_all(&folder_path)?;
-
-            let safe_path = folder_path.clone()
-                + &"/safe_".to_owned()
-                + &iteration.to_string()
-                + &".wgsl".to_owned();
-            let safe_output = Box::new(BufWriter::new(File::create(safe_path)?));
-            ast::writer::Writer::default().write_module_default(safe_output, &shaders.safe)?;
-
-            let race_path = folder_path.clone()
-                + &"/race_".to_owned()
-                + &iteration.to_string()
-                + &".wgsl".to_owned();
-            let race_output = Box::new(BufWriter::new(File::create(race_path)?));
-            ast::writer::Writer::default().write_module_default(race_output, &shaders.race)?;
-
-            let info_path = folder_path.clone() + &"/info.json".to_owned();
-            let mut info_output = Box::new(BufWriter::new(File::create(info_path)?));
-            writeln!(info_output, "{}", to_string(&shaders.info)?)?;
-
-            let input_path = folder_path.clone() + &"/input.json".to_owned();
-            let mut input_output = Box::new(BufWriter::new(File::create(input_path)?));
-            writeln!(input_output, "{}", to_string(&input_info)?)?;
-
-            let mismatches_path = folder_path.clone() + &"/errors.out".to_owned();
-            let mut mismatches_output = Box::new(BufWriter::new(File::create(mismatches_path)?));
-            for mismatch in mismatches {
-                println!("{:?}", mismatch);
-                writeln!(mismatches_output, "{}", to_string(&mismatch)?)?;
+            GenOptions {
+                seed: OsRng.gen(),
+                workgroup_size: options.workgroup_size,
+                racy_loc_pct: options.racy_loc_pct,
+                racy_constant_loc_pct: options.racy_constant_loc_pct,
+                racy_var_pct: options.racy_var_pct,
+                block_max_stmts: options.block_max_stmts,
+                block_max_nest_level: options.block_max_nest_level,
+                else_chance: options.else_chance,
+                max_loop_iter: options.max_loop_iter,
+                num_lits: options.num_lits,
+                stmts: options.stmts,
+                vars: options.vars,
+                uninit_vars: options.uninit_vars,
+                locs_per_thread: options.locs_per_thread,
+                constant_locs: options.constant_locs,
+                race_val_strat: options.race_value_strategy,
+                oob_pct: options.oob_pct,
+                data_buf_size: options.data_buf_size,
+                pattern_slots: options.pattern_slots,
             }
+        };
+
+        let workgroups = if options.random_opts {
+            thread_rng().gen_range(1..=128)
+        } else {
+            options.workgroups
+        };
+
+        match data_race_generator::gen_result(&gen_opts) {
+            Ok(shaders) => {
+                let input_size =
+                    ((gen_opts.workgroup_size * workgroups * gen_opts.locs_per_thread)
+                        + gen_opts.constant_locs)
+                        * 4; // Mult by 4 since u8
+                let random_data: Vec<u8> = match shaders.info.race_val_strat {
+                    Some(RaceValueStrategy::Even) => (0..input_size)
+                        .map(|i| if i % 4 == 0 { 2 } else { 0 })
+                        .collect(),
+                    None => (0..input_size)
+                        .map(|i| if i % 4 == 0 { 1 } else { 0 })
+                        .collect(),
+                };
+                let pattern_data_buffer: Vec<u8> = (0..(gen_opts.data_buf_size * 4))
+                    .map(|i| if i % 4 == 0 { 1 } else { 0 })
+                    .collect();
+                let mut input_info = HashMap::new();
+                input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data }); // mem buffer
+                input_info.insert(
+                    "0:1".to_owned(),
+                    BufferInitInfo::Size {
+                        size: gen_opts.workgroup_size * workgroups * gen_opts.uninit_vars * 4,
+                    },
+                ); // uninit vars buffer
+                input_info.insert(
+                    "0:2".to_owned(),
+                    BufferInitInfo::Size {
+                        size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4,
+                    },
+                ); // index pattern buffer
+                input_info.insert(
+                    "0:3".to_owned(),
+                    BufferInitInfo::Data {
+                        data: pattern_data_buffer,
+                    },
+                ); // data pattern buffer
+                input_info.insert(
+                    "0:4".to_owned(),
+                    BufferInitInfo::Size {
+                        size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4,
+                    },
+                ); // output pattern buffer
+
+                let mut racy_buf = Vec::new();
+                let racy_output: Box<dyn io::Write> = Box::new(&mut racy_buf);
+                ast::writer::Writer::default().write_module_default(racy_output, &shaders.race)?;
+                let racy_shader = String::from_utf8(racy_buf)?;
+
+                let mut safe_buf = Vec::new();
+                let safe_output: Box<dyn io::Write> = Box::new(&mut safe_buf);
+                ast::writer::Writer::default().write_module_default(safe_output, &shaders.safe)?;
+                let safe_shader = String::from_utf8(safe_buf)?;
+
+                let exec_options = data_race_runner::ExecOptions {
+                    configs: configs.clone(),
+                    workgroups: workgroups,
+                    workgroup_size: gen_opts.workgroup_size,
+                    reps: options.config_rep,
+                    check_mismatches: mismatches_to_check.clone(),
+                };
+
+                let mismatches = data_race_runner::execute(
+                    racy_shader,
+                    safe_shader,
+                    &shaders.info,
+                    &input_info,
+                    exec_options,
+                );
+
+                if mismatches.len() == 0 {
+                    println!("Iteration {}: {}", iteration, "Configs match".green());
+                } else {
+                    println!("Iteration {}: {}", iteration, "Configs mismatch".red());
+
+                    let folder_path =
+                        options.target.clone() + &"/".to_owned() + &iteration.to_string();
+                    fs::create_dir_all(&folder_path)?;
+
+                    let safe_path = folder_path.clone()
+                        + &"/safe_".to_owned()
+                        + &iteration.to_string()
+                        + &".wgsl".to_owned();
+                    let safe_output = Box::new(BufWriter::new(File::create(safe_path)?));
+                    ast::writer::Writer::default()
+                        .write_module_default(safe_output, &shaders.safe)?;
+
+                    let race_path = folder_path.clone()
+                        + &"/race_".to_owned()
+                        + &iteration.to_string()
+                        + &".wgsl".to_owned();
+                    let race_output = Box::new(BufWriter::new(File::create(race_path)?));
+                    ast::writer::Writer::default()
+                        .write_module_default(race_output, &shaders.race)?;
+
+                    let info_path = folder_path.clone() + &"/info.json".to_owned();
+                    let mut info_output = Box::new(BufWriter::new(File::create(info_path)?));
+                    writeln!(info_output, "{}", to_string(&shaders.info)?)?;
+
+                    let input_path = folder_path.clone() + &"/input.json".to_owned();
+                    let mut input_output = Box::new(BufWriter::new(File::create(input_path)?));
+                    writeln!(input_output, "{}", to_string(&input_info)?)?;
+
+                    let mismatches_path = folder_path.clone() + &"/errors.out".to_owned();
+                    let mut mismatches_output =
+                        Box::new(BufWriter::new(File::create(mismatches_path)?));
+                    for mismatch in mismatches {
+                        println!("{:?}", mismatch);
+                        writeln!(mismatches_output, "{}", to_string(&mismatch)?)?;
+                    }
+                }
+            }
+            Err(failure) => println!("Generation failure: {}", failure.reason),
         }
         iteration += 1;
     }
