@@ -76,8 +76,7 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     let safe_shader = read_shader_from_path(&options.safe_shader)?;
     let racy_shader = read_shader_from_path(&options.racy_shader)?;
     let data_race_info: DataRaceInfo = serde_json::from_reader(File::open(&options.data_race_info)?)?;
-    let input_size = ((options.workgroup_size * options.workgroups * data_race_info.locs_per_thread) + data_race_info.constant_locs) * 4; // Mult by 4 since u8
-    let input_data = get_input_data(&options, &data_race_info, input_size)?; 
+    let input_data = get_input_data(&options, &data_race_info)?; 
     let exec_options = ExecOptions {
       configs,
       workgroups: options.workgroups,
@@ -99,7 +98,7 @@ pub fn run(options: RunOptions) -> eyre::Result<()> {
     Ok(())
 }
 
-fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo, size: u32) -> eyre::Result<HashMap<String, BufferInitInfo>> {
+fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo) -> eyre::Result<HashMap<String, BufferInitInfo>> {
   match &options.input_data {
     Some(input_data) => match File::open(input_data) {
       Ok(file) => serde_json::from_reader(file)
@@ -107,21 +106,27 @@ fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo, size: u32
       Err(e) => Err(e.into()),
     },
     None => {
+      let input_size = ((options.workgroup_size * options.workgroups * data_race_info.locs_per_thread) + data_race_info.constant_locs) * 4; // Mult by 4 since u8
+      let pattern_bufs_size = options.workgroup_size * options.workgroups * data_race_info.pattern_slots * 4;
+
       // if no input passed, initialize all data to 1 (2 if using even strategy)
       let random_data: Vec<u8> = match data_race_info.race_val_strat {
-        Some(RaceValueStrategy::Even) => (0..size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
-        None => (0..size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
+        Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
+        None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
       };
       let pattern_data_buffer: Vec<u8> = (0..(data_race_info.data_buf_size * 4)).map(
         |i| if i % 4  == 0 { 1 } else { 0 } ).collect();
+
+      let pattern_output_buffer_data: Vec<u8> = (0..pattern_bufs_size)
+        .map(|i| if i % 4 == 0 { 1 } else { 0 })
+        .collect();
+
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
       map.insert("0:1".to_owned(), BufferInitInfo::Size { size: data_race_info.num_uninit_vars * options.workgroups * options.workgroup_size * 4});
-      map.insert("0:2".to_owned(), BufferInitInfo::Size {
-        size: options.workgroup_size * options.workgroups * data_race_info.pattern_slots * 4}); // index pattern buffer
-      map.insert("0:3".to_owned(), BufferInitInfo::Data {data: pattern_data_buffer}); // data pattern buffer
-      map.insert("0:4".to_owned(), BufferInitInfo::Size {
-          size: options.workgroup_size * options.workgroups * data_race_info.pattern_slots * 4}); // output pattern buffer
+      map.insert("0:2".to_owned(), BufferInitInfo::Size { size: pattern_bufs_size}); // index pattern buffer
+      map.insert("0:3".to_owned(), BufferInitInfo::Data { data: pattern_data_buffer}); // data pattern buffer
+      map.insert("0:4".to_owned(), BufferInitInfo::Data { data: pattern_output_buffer_data }); // output pattern buffer
 
       Ok(map)
     }

@@ -236,6 +236,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
                     ((gen_opts.workgroup_size * workgroups * gen_opts.locs_per_thread)
                         + gen_opts.constant_locs)
                         * 4; // Mult by 4 since u8
+
+                let pattern_bufs_size = gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4;
                 let random_data: Vec<u8> = match shaders.info.race_val_strat {
                     Some(RaceValueStrategy::Even) => (0..input_size)
                         .map(|i| if i % 4 == 0 { 2 } else { 0 })
@@ -247,6 +249,11 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 let pattern_data_buffer: Vec<u8> = (0..(gen_opts.data_buf_size * 4))
                     .map(|i| if i % 4 == 0 { 1 } else { 0 })
                     .collect();
+
+                let pattern_output_buffer_data: Vec<u8> = (0..pattern_bufs_size)
+                    .map(|i| if i % 4 == 0 { 1 } else { 0 })
+                    .collect();
+
                 let mut input_info = HashMap::new();
                 input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data }); // mem buffer
                 input_info.insert(
@@ -258,7 +265,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 input_info.insert(
                     "0:2".to_owned(),
                     BufferInitInfo::Size {
-                        size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4,
+                        size: pattern_bufs_size
                     },
                 ); // index pattern buffer
                 input_info.insert(
@@ -269,9 +276,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 ); // data pattern buffer
                 input_info.insert(
                     "0:4".to_owned(),
-                    BufferInitInfo::Size {
-                        size: gen_opts.workgroup_size * workgroups * gen_opts.pattern_slots * 4,
-                    },
+                    BufferInitInfo::Data { data: pattern_output_buffer_data }
                 ); // output pattern buffer
 
                 let mut racy_buf = Vec::new();
