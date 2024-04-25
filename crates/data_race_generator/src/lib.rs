@@ -92,7 +92,7 @@ pub struct GenOptions {
     pub oob_pct: u32,
     pub data_buf_size: u32,
     pub pattern_slots: u32,
-pub pattern_weights: (i32, i32, i32, i32)
+    pub pattern_weights: (i32, i32, i32, i32)
 }
 
 pub fn gen(options: &GenOptions) -> Shaders {
@@ -786,17 +786,16 @@ impl<'a> Generator<'a> {
         if decider < 70 || nest_level == self.options.block_max_nest_level || stmts_left < 2 {
             // Gen assign
             return self.gen_assign(racy_block);
-        } else if decider < 90 {
+        } else if decider < 80 {
             // Gen if
             return self.gen_if(stmts_left, nest_level + 1, racy_block);
-        } else if decider < 94 {
+        } else if decider < 90 {
             // Gen loop
             return self.gen_for(stmts_left, nest_level + 1, racy_block);
-        } else if decider > 97  {
+        } else if decider < 95  {
             return self.gen_workgroup_pattern(stmts_left, nest_level + 1, racy_block);
-        }
-        else {
-            return self.gen_workgroup_pattern(stmts_left, nest_level + 1, racy_block);
+        } else {
+            return self.gen_pattern(stmts_left, nest_level + 1, racy_block);
         }
     }
 

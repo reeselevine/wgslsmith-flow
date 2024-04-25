@@ -166,6 +166,7 @@ fn random_opts(disable_oob: bool) -> GenOptions {
         },
         data_buf_size: rng.gen_range(32..=1024),
         pattern_slots: rng.gen_range(1..=5),
+        pattern_weights: (25, 25, 25, 25)
     }
 }
 
@@ -221,6 +222,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 oob_pct: options.oob_pct,
                 data_buf_size: options.data_buf_size,
                 pattern_slots: options.pattern_slots,
+                pattern_weights: (25, 25, 25, 25)
             }
         };
 
@@ -246,13 +248,6 @@ pub fn run(options: Options) -> eyre::Result<()> {
                         .map(|i| if i % 4 == 0 { 1 } else { 0 })
                         .collect(),
                 };
-                let pattern_data_buffer: Vec<u8> = (0..(gen_opts.data_buf_size * 4))
-                    .map(|i| if i % 4 == 0 { 1 } else { 0 })
-                    .collect();
-
-                let pattern_output_buffer_data: Vec<u8> = (0..pattern_bufs_size)
-                    .map(|i| if i % 4 == 0 { 1 } else { 0 })
-                    .collect();
 
                 let mut input_info = HashMap::new();
                 input_info.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data }); // mem buffer
@@ -264,19 +259,17 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 ); // uninit vars buffer
                 input_info.insert(
                     "0:2".to_owned(),
-                    BufferInitInfo::Size {
-                        size: pattern_bufs_size
-                    },
+                    BufferInitInfo::Size { size: pattern_bufs_size }
                 ); // index pattern buffer
                 input_info.insert(
                     "0:3".to_owned(),
-                    BufferInitInfo::Data {
-                        data: pattern_data_buffer,
+                    BufferInitInfo::Size {
+                      size: gen_opts.data_buf_size * 4
                     },
                 ); // data pattern buffer
                 input_info.insert(
                     "0:4".to_owned(),
-                    BufferInitInfo::Data { data: pattern_output_buffer_data }
+                    BufferInitInfo::Size { size: pattern_bufs_size }
                 ); // output pattern buffer
 
                 let mut racy_buf = Vec::new();

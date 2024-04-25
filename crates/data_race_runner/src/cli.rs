@@ -114,19 +114,12 @@ fn get_input_data(options: &RunOptions, data_race_info: &DataRaceInfo) -> eyre::
         Some(RaceValueStrategy::Even) => (0..input_size).map(|i| if i % 4  == 0 { 2 } else { 0 } ).collect(),
         None => (0..input_size).map(|i| if i % 4  == 0 { 1 } else { 0 } ).collect()
       };
-      let pattern_data_buffer: Vec<u8> = (0..(data_race_info.data_buf_size * 4)).map(
-        |i| if i % 4  == 0 { 1 } else { 0 } ).collect();
-
-      let pattern_output_buffer_data: Vec<u8> = (0..pattern_bufs_size)
-        .map(|i| if i % 4 == 0 { 1 } else { 0 })
-        .collect();
-
       let mut map = HashMap::new();
       map.insert("0:0".to_owned(), BufferInitInfo::Data { data: random_data });
       map.insert("0:1".to_owned(), BufferInitInfo::Size { size: data_race_info.num_uninit_vars * options.workgroups * options.workgroup_size * 4});
       map.insert("0:2".to_owned(), BufferInitInfo::Size { size: pattern_bufs_size}); // index pattern buffer
-      map.insert("0:3".to_owned(), BufferInitInfo::Data { data: pattern_data_buffer}); // data pattern buffer
-      map.insert("0:4".to_owned(), BufferInitInfo::Data { data: pattern_output_buffer_data }); // output pattern buffer
+      map.insert("0:3".to_owned(), BufferInitInfo::Size { size: data_race_info.data_buf_size * 4}); // data pattern buffer
+      map.insert("0:4".to_owned(), BufferInitInfo::Size { size: pattern_bufs_size }); // output pattern buffer
 
       Ok(map)
     }
