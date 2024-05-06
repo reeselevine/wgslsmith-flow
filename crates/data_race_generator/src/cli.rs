@@ -97,6 +97,10 @@ pub struct Options {
     /// The number of times a oob pattern is attempted
     #[clap(long, action, default_value = "3")]
     pub pattern_slots: u32,
+
+    /// Try and maximize register pressure
+    #[clap(long, action, default_value = "false")]
+    pub reg_pressure: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -164,7 +168,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
       pattern_weights: (33, 17, 17, 33),
       oob_pct: options.oob_pct,
       data_buf_size: options.data_buf_size,
-      pattern_slots: options.pattern_slots
+      pattern_slots: options.pattern_slots,
+      reg_pressure: options.reg_pressure
     };
     let out = crate::Generator::new(&mut rng, &gen_options).gen_module();
     

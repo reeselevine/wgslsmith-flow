@@ -92,7 +92,8 @@ pub struct GenOptions {
     pub oob_pct: u32,
     pub data_buf_size: u32,
     pub pattern_slots: u32,
-    pub pattern_weights: (i32, i32, i32, i32)
+    pub pattern_weights: (i32, i32, i32, i32),
+    pub reg_pressure: bool
 }
 
 pub fn gen(options: &GenOptions) -> Shaders {

@@ -134,9 +134,13 @@ pub struct Options {
     /// The mismatch types to check
     #[clap(long, action)]
     pub check_mismatches: Vec<MismatchType>,
+
+    /// Try and maximize register pressure 
+    #[clap(long, action, default_value = "false")]
+    pub reg_pressure: bool,
 }
 
-fn random_opts(disable_oob: bool) -> GenOptions {
+fn random_opts(disable_oob: bool, reg_pressure: bool) -> GenOptions {
     let mut rng = thread_rng();
     GenOptions {
         seed: rng.gen_range(0..=18446744073709551615),
@@ -166,7 +170,8 @@ fn random_opts(disable_oob: bool) -> GenOptions {
         },
         data_buf_size: rng.gen_range(32..=1024),
         pattern_slots: rng.gen_range(1..=5),
-        pattern_weights: (25, 25, 25, 25)
+        pattern_weights: (25, 25, 25, 25),
+        reg_pressure: reg_pressure
     }
 }
 
@@ -200,7 +205,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
     // 2) Loop and run for repeat times
     while options.inf_run || iteration < options.repeat.into() {
         let gen_opts = if options.random_opts {
-            random_opts(options.disable_oob)
+            random_opts(options.disable_oob, options.reg_pressure)
         } else {
             GenOptions {
                 seed: OsRng.gen(),
@@ -222,7 +227,8 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 oob_pct: options.oob_pct,
                 data_buf_size: options.data_buf_size,
                 pattern_slots: options.pattern_slots,
-                pattern_weights: (25, 25, 25, 25)
+                pattern_weights: (25, 25, 25, 25),
+                reg_pressure: options.reg_pressure
             }
         };
 
