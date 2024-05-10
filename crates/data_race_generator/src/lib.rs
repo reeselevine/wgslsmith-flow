@@ -468,7 +468,27 @@ impl<'a> Generator<'a> {
         for (i, var) in self.uninit_vars.to_owned().iter().enumerate() {
             block.push(self.read_uninitialized_var(var.clone(), i as u32));
         }
-
+        block.push(IfStatement::new(
+            BinOpExpr::new(
+                BinOp::Less,
+                VarExpr::new("local_invocation_id.x").into_node(DataType::from(ScalarType::U32)),
+                Lit::U32(2)
+            ),
+            vec![AssignmentStatement::new(
+                AssignmentLhs::array_index(
+                    "workgroup_buf",
+                    DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    Lit::U32(0).into(),
+                ),
+                AssignmentOp::Simple,
+                Lit::U32(0)
+            ).into()]
+            // assign  
+        ).into());
+        
         // Make a block to store statements that are safe
         let mut safe_block: Vec<Statement> = block.clone();
 
@@ -522,11 +542,19 @@ impl<'a> Generator<'a> {
         num_workgroups
             .attrs
             .push(FnInputAttr::Builtin("num_workgroups".to_string()));
+
         let mut global_invocation_id =
             FnInput::new("global_invocation_id", DataType::Vector(3, ScalarType::U32));
         global_invocation_id
             .attrs
             .push(FnInputAttr::Builtin("global_invocation_id".to_string()));
+
+        let mut local_invocation_id =
+            FnInput::new("local_invocation_id", DataType::Vector(3, ScalarType::U32));
+        local_invocation_id
+            .attrs
+            .push(FnInputAttr::Builtin("local_invocation_id".to_string()));
+
 
         let entrypoint = FnDecl {
             attrs: vec![
@@ -534,7 +562,7 @@ impl<'a> Generator<'a> {
                 FnAttr::LitWorkgroupSize(self.options.workgroup_size),
             ],
             name: "main".to_owned(),
-            inputs: vec![num_workgroups.clone(), global_invocation_id.clone()],
+            inputs: vec![num_workgroups.clone(), global_invocation_id.clone(), local_invocation_id.clone()],
             output: None,
             body: block,
         };
@@ -545,7 +573,7 @@ impl<'a> Generator<'a> {
                 FnAttr::LitWorkgroupSize(self.options.workgroup_size),
             ],
             name: "main".to_owned(),
-            inputs: vec![num_workgroups, global_invocation_id],
+            inputs: vec![num_workgroups, global_invocation_id, local_invocation_id],
             output: None,
             body: safe_block,
         };
