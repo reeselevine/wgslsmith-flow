@@ -164,7 +164,7 @@ pub fn execute(
                         let ind: usize =
                             usize::try_from(thread_id * data_race_info.pattern_slots + offset)
                                 .unwrap();
-                        if race_pattern_output[ind] > 1 {
+                        if race_pattern_output[ind] != 0 {
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,

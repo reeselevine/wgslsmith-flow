@@ -92,6 +92,7 @@ pub struct GenOptions {
     pub oob_pct: u32,
     pub data_buf_size: u32,
     pub pattern_slots: u32,
+    pub pattern_weights: (i32, i32, i32, i32)
 }
 
 pub fn gen(options: &GenOptions) -> Shaders {
@@ -268,7 +269,9 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowAdd,
             RacePatternType::DivideByZero,
         ];
-        let pattern_weights = WeightedIndex::new(vec![33, 17, 17, 33]).unwrap();
+        
+        // terrible fix later
+        let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3]).unwrap();
 
         Generator {
             rng,
@@ -407,6 +410,16 @@ impl<'a> Generator<'a> {
                 data_type: DataType::array(ScalarType::U32, None),
                 initializer: None,
             },
+            GlobalVarDecl {
+                attrs: vec![],
+                qualifier: Some(VarQualifier {
+                    storage_class: StorageClass::WorkGroup,
+                    access_mode: None,
+                }),
+                name: "workgroup_buf".to_owned(),
+                data_type: DataType::array(ScalarType::U32, 128),
+                initializer: None,
+            },
         ];
 
         let mut block: Vec<Statement> = vec![];
@@ -437,6 +450,8 @@ impl<'a> Generator<'a> {
             )
             .into(),
         );
+
+        // total workgroup pattern slots is the 
 
         for var in self.safe_vars.to_owned() {
             block.push(self.initialize_var(var));
@@ -771,12 +786,14 @@ impl<'a> Generator<'a> {
         if decider < 70 || nest_level == self.options.block_max_nest_level || stmts_left < 2 {
             // Gen assign
             return self.gen_assign(racy_block);
-        } else if decider < 90 {
+        } else if decider < 80 {
             // Gen if
             return self.gen_if(stmts_left, nest_level + 1, racy_block);
-        } else if decider < 95 {
+        } else if decider < 90 {
             // Gen loop
             return self.gen_for(stmts_left, nest_level + 1, racy_block);
+        } else if decider < 95  {
+            return self.gen_workgroup_pattern(stmts_left, nest_level + 1, racy_block);
         } else {
             return self.gen_pattern(stmts_left, nest_level + 1, racy_block);
         }
@@ -1176,6 +1193,160 @@ impl<'a> Generator<'a> {
         }
     }
 
+    /*
+       total_pattern_slots = total_ids * pattern_slots;
+       pattern_index = id.x * pattern_slots;
+
+       index_buf[total_pattern_slots]
+       workgroup_buf[256]
+       output_buf[total_pattern_slots]
+
+       c = 0..pattern_slots
+
+       for c in pattern_slots:
+       index_buf[pattern_index + c] = 0
+
+       if (index_buf[pattern_index + c] < total_ids) {
+           statements...
+
+           output_buf[pattern_index + c] = workgroup_buf[index_buf[pattern_index + c]]
+       }
+       pattern_assignment();
+    */
+    fn gen_workgroup_pattern(
+        &mut self,
+        stmts_left: u32,
+        nest_level: u32,
+        racy_block: bool,
+    ) -> StatementGenInfo {
+        if stmts_left < 4 || self.options.pattern_slots == self.pattern_slots_used {
+            return self.gen_statement(stmts_left, nest_level, racy_block);
+        }
+
+        let pattern_type = self.pattern_types[self.pattern_type_weights.sample(self.rng)];
+
+        let c = self.pattern_slots_used;
+
+        self.pattern_slots_used += 1;
+
+        // Index assignment: index_buf[pattern_index + c] = 0
+        let assign = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "index_buf",
+                DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::I32, None),
+                    StorageClass::Storage,
+                )),
+                BinOpExpr::new(
+                    BinOp::Plus,
+                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                    Lit::U32(c),
+                )
+                .into(),
+            ),
+            AssignmentOp::Simple,
+            Lit::I32(self.gen_pattern_init(pattern_type)),
+        );
+
+        let mut if_body_stmts: Vec<Statement> = Vec::new();
+
+        // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
+        // There has to be a better way to do this??? This feels like javascript
+        let array_cast = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "output_buf",
+                DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                BinOpExpr::new(
+                    BinOp::Plus,
+                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                    Lit::U32(c),
+                )
+                .into(),
+            ),
+            AssignmentOp::Simple,
+            PostfixExpr::new(
+                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                ))),
+                self.gen_pattern_race_stmt(pattern_type, c),
+            ),
+        );
+
+        // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
+        // used for the pattern)
+        let mut num_statements = cmp::min(
+            self.rng.gen_range(1..self.options.block_max_stmts) - 1,
+            stmts_left - 3,
+        );
+        let generated_statements = num_statements + 3;
+
+        while num_statements > 0 {
+            let gen_info = self.gen_statement(num_statements, nest_level, true);
+            if_body_stmts.extend(gen_info.statements.iter().cloned());
+            num_statements -= gen_info.generated_statements;
+        }
+
+        if_body_stmts.push(array_cast.into());
+
+        // half the time we include an if statement as part of the pattern
+        let mut pattern_stmts = if self.rng.gen_bool(0.5) {
+            let if_stmt = IfStatement::new(
+                self.gen_pattern_cond(pattern_type, c),
+                if_body_stmts.clone(),
+            );
+            vec![if_stmt.into()]
+        } else {
+            if_body_stmts
+        };
+
+        // (index_buf[pattern_index + c] < total_ids)
+
+        // Handoff: index_buf[((id.x  + offset) % total_ids) * pattern_slots + c] =  id.x * pattern_slots + data_buf_size;
+        let handoff = AssignmentStatement::new(
+            AssignmentLhs::array_index(
+                "index_buf",
+                DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                )),
+                BinOpExpr::new(
+                    BinOp::Plus,
+                    BinOpExpr::new(
+                        BinOp::Times,
+                        BinOpExpr::new(
+                            BinOp::Mod,
+                            BinOpExpr::new(
+                                BinOp::Plus,
+                                VarExpr::new("global_invocation_id.x")
+                                    .into_node(DataType::from(ScalarType::U32)),
+                                Lit::U32(8),
+                            ),
+                            VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)),
+                        ),
+                        Lit::U32(self.options.pattern_slots),
+                    ),
+                    Lit::U32(c),
+                )
+                .into(),
+            ),
+            AssignmentOp::Simple,
+            self.gen_pattern_race_val(pattern_type),
+        );
+
+        pattern_stmts.insert(0, assign.into());
+        pattern_stmts.push(handoff.into());
+
+        StatementGenInfo {
+            generated_statements: generated_statements,
+            statements: pattern_stmts.into(),
+            safe_statements: None,
+        }
+    }
+
     fn gen_pattern_race_stmt(&mut self, pattern_type: RacePatternType, offset: u32) -> Postfix {
         let base = PostfixExpr::new(
             VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
@@ -1197,9 +1368,9 @@ impl<'a> Generator<'a> {
                 BinOpExpr::new(BinOp::Plus, base, Lit::I32(RACE_PATTERN_ADD_VAL)).into()
             }
             RacePatternType::DivideByZero => BinOpExpr::new(
-                BinOp::Divide,
-                Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
-                base,
+              BinOp::Divide,
+              Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
+              base,
             )
             .into(),
         };
