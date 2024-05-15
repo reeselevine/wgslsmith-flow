@@ -149,7 +149,7 @@ fn random_opts(disable_oob: bool) -> GenOptions {
         else_chance: rng.gen_range(0..=100),
         max_loop_iter: 10,
         num_lits: rng.gen_range(1..=16),
-        stmts: rng.gen_range(0..=1000),
+        stmts: rng.gen_range(1000..=5000),
         vars: rng.gen_range(1..=16),
         uninit_vars: rng.gen_range(1..=16),
         locs_per_thread: rng.gen_range(1..=16),
@@ -164,7 +164,7 @@ fn random_opts(disable_oob: bool) -> GenOptions {
         } else {
             Some(RaceValueStrategy::Even)
         },
-        data_buf_size: rng.gen_range(32..=1024),
+        data_buf_size: rng.gen_range(10000..=250000),
         pattern_slots: rng.gen_range(1..=5),
         pattern_weights: (25, 25, 25, 25)
     }
