@@ -171,7 +171,7 @@ pub fn execute(
                                 mismatch_type: MismatchType::OobRead,
                                 thread: Some(thread_id),
                                 index: u32::try_from(ind).unwrap(),
-                                expected: Expected::Value(1),
+                                expected: Expected::Value(0),
                                 actual: race_pattern_output[ind],
                             });
                         }
