@@ -5,17 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use ast::types::{DataType, MemoryViewType, ScalarType};
 use ast::{
-    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn,
-    Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit,
-    ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement,
-    Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, TypeConsExpr,
-    VarDeclStatement, VarExpr, VarQualifier,
+    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn, Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit, ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement, LhsExpr, LhsExprNode, Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, StructDecl, StructMember, StructMemberAttr, TypeConsExpr, VarDeclStatement, VarExpr, VarQualifier
 };
 
 use rand::distributions::WeightedIndex;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
+use tracing_subscriber::registry::Data;
 use std::cmp;
 
 const RACE_PATTERN_ADD_VAL: i32 = 512643019;
@@ -134,6 +131,7 @@ pub struct Generator<'a> {
     pattern_types: Vec<RacePatternType>,
     pattern_type_weights: WeightedIndex<i32>,
     pattern_slots_used: u32,
+    data_index_pair: std::rc::Rc<StructDecl>,
 }
 
 const SAFE_ACCESS_TYPES: [AccessType; 4] = [
@@ -269,6 +267,22 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowAdd,
             RacePatternType::DivideByZero,
         ];
+
+        let data_index_pair = StructDecl::new(
+            "data_index_pair",
+            vec![
+                StructMember::new(
+                    vec![],
+                    "index",
+                    ScalarType::U32.into()
+                ),
+                StructMember::new(
+                    vec![],
+                    "data",
+                    ScalarType::U32.into()
+                ),
+            ]
+        );
         
         // terrible fix later
         let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3]).unwrap();
@@ -295,6 +309,7 @@ impl<'a> Generator<'a> {
             pattern_types: pattern_types,
             pattern_type_weights: pattern_weights,
             pattern_slots_used: 0,
+            data_index_pair: data_index_pair
         }
     }
 
@@ -407,7 +422,7 @@ impl<'a> Generator<'a> {
                     access_mode: Some(AccessMode::ReadWrite),
                 }),
                 name: "output_buf".to_owned(),
-                data_type: DataType::array(ScalarType::U32, None),
+                data_type: DataType::array(DataType::Struct(self.data_index_pair.clone()), None),
                 initializer: None,
             },
             GlobalVarDecl {
@@ -583,13 +598,13 @@ impl<'a> Generator<'a> {
 
         Shaders {
             safe: Module {
-                structs: vec![],
+                structs: vec![self.data_index_pair.clone()],
                 consts: vec![],
                 vars: global_vars.clone(),
                 functions: safe_functions,
             },
             race: Module {
-                structs: vec![],
+                structs: vec![self.data_index_pair.clone()],
                 consts: vec![],
                 vars: global_vars.clone(),
                 functions,
@@ -1126,29 +1141,83 @@ impl<'a> Generator<'a> {
 
         // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
         // There has to be a better way to do this??? This feels like javascript
-        let array_cast = AssignmentStatement::new(
-            AssignmentLhs::array_index(
-                "output_buf",
-                DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage,
-                )),
-                BinOpExpr::new(
-                    BinOp::Plus,
-                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c),
-                )
-                .into(),
-            ),
+        let output_data_lhs = LhsExprNode {
+            data_type: DataType::Scalar(ScalarType::U32),
+            expr: LhsExpr::Postfix(
+                Box::new(LhsExprNode {
+                    data_type: DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    expr: LhsExpr::Postfix(
+                        Box::new(LhsExprNode {
+                            data_type: DataType::array(ScalarType::U32, None),
+                            expr: LhsExpr::Ident("output_buf".to_owned())
+                        }), 
+                        Postfix::Index(Box::new(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        ).into()))
+                    )
+                }),
+                Postfix::Member("data".to_owned())
+            )
+        };
+
+        let output_index_lhs = LhsExprNode {
+            data_type: DataType::Scalar(ScalarType::U32),
+            expr: LhsExpr::Postfix(
+                Box::new(LhsExprNode {
+                    data_type: DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    expr: LhsExpr::Postfix(
+                        Box::new(LhsExprNode {
+                            data_type: DataType::array(ScalarType::U32, None),
+                            expr: LhsExpr::Ident("output_buf".to_owned())
+                        }), 
+                        Postfix::Index(Box::new(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        ).into()))
+                    )
+                }),
+                Postfix::Member("index".to_owned())
+            )
+        }; 
+        
+        let unwrapped_index = match self.gen_pattern_race_stmt(pattern_type, c) {
+            Postfix::Index(a) => *a,
+            Postfix::Member(_) => panic!("What?"),
+        };
+
+        let temporary_variable = LetDeclStatement::new(
+            "temp",
+            unwrapped_index.clone()
+        );
+
+        let data_array_cast = AssignmentStatement::new(
+            AssignmentLhs::Expr(output_data_lhs),
             AssignmentOp::Simple,
             PostfixExpr::new(
-                VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
+                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
                     DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 ))),
-                self.gen_pattern_race_stmt(pattern_type, c),
+                Postfix::Index(Box::new(VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32)))),
             ),
         );
+        
+        let index_array_cast = AssignmentStatement::new(
+            AssignmentLhs::Expr(output_index_lhs),
+            AssignmentOp::Simple,
+            VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32))
+        );
+
+        
 
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
         // used for the pattern)
@@ -1164,7 +1233,9 @@ impl<'a> Generator<'a> {
             num_statements -= gen_info.generated_statements;
         }
 
-        if_body_stmts.push(array_cast.into());
+        if_body_stmts.push(temporary_variable.into());
+        if_body_stmts.push(data_array_cast.into());
+        if_body_stmts.push(index_array_cast.into());
 
         // half the time we include an if statement as part of the pattern
         let mut pattern_stmts = if self.rng.gen_bool(0.5) {
@@ -1237,7 +1308,9 @@ impl<'a> Generator<'a> {
        if (index_buf[pattern_index + c] < total_ids) {
            statements...
 
-           output_buf[pattern_index + c] = workgroup_buf[index_buf[pattern_index + c]]
+           output_buf[pattern_index + c].data = workgroup_buf[index_buf[pattern_index + c]]
+           output_buf[pattern_index + c].index = index_buf[pattern_index + c]
+
        }
        pattern_assignment();
     */
@@ -1278,9 +1351,86 @@ impl<'a> Generator<'a> {
 
         let mut if_body_stmts: Vec<Statement> = Vec::new();
 
-        // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
-        // There has to be a better way to do this??? This feels like javascript
-        let array_cast = AssignmentStatement::new(
+        // output_buf[pattern_index + c].data = data_buf[index_buf[pattern_index + c]]
+        // output_buf[pattern_index + c].index = index_buf[pattern_index + c]
+        let output_data_lhs = LhsExprNode {
+            data_type: DataType::Scalar(ScalarType::U32),
+            expr: LhsExpr::Postfix(
+                Box::new(LhsExprNode {
+                    data_type: DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    expr: LhsExpr::Postfix(
+                        Box::new(LhsExprNode {
+                            data_type: DataType::array(ScalarType::U32, None),
+                            expr: LhsExpr::Ident("output_buf".to_owned())
+                        }), 
+                        Postfix::Index(Box::new(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        ).into()))
+                    )
+                }),
+                Postfix::Member("data".to_owned())
+            )
+        };
+
+        let output_index_lhs = LhsExprNode {
+            data_type: DataType::Scalar(ScalarType::U32),
+            expr: LhsExpr::Postfix(
+                Box::new(LhsExprNode {
+                    data_type: DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    expr: LhsExpr::Postfix(
+                        Box::new(LhsExprNode {
+                            data_type: DataType::array(ScalarType::U32, None),
+                            expr: LhsExpr::Ident("output_buf".to_owned())
+                        }), 
+                        Postfix::Index(Box::new(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        ).into()))
+                    )
+                }),
+                Postfix::Member("index".to_owned())
+            )
+        }; 
+
+        let unwrapped_index = match self.gen_pattern_race_stmt(pattern_type, c) {
+            Postfix::Index(a) => *a,
+            Postfix::Member(_) => panic!("What?"),
+        };
+
+        let temporary_variable = LetDeclStatement::new(
+            "temp",
+            unwrapped_index.clone()
+        );
+
+        let data_array_cast = AssignmentStatement::new(
+            AssignmentLhs::Expr(output_data_lhs),
+            AssignmentOp::Simple,
+            PostfixExpr::new(
+                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
+                    DataType::array(ScalarType::U32, None),
+                    StorageClass::Storage,
+                ))),
+                Postfix::Index(Box::new(VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32)))),
+            ),
+        );
+        
+        let index_array_cast = AssignmentStatement::new(
+            AssignmentLhs::Expr(output_index_lhs),
+            AssignmentOp::Simple,
+            VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32))
+        );
+        /*let x = AssignmentLhs::member(
+            "output_buf".to_owned(),
+            ScalarType::U32,
             AssignmentLhs::array_index(
                 "output_buf",
                 DataType::Ref(MemoryViewType::new(
@@ -1293,17 +1443,7 @@ impl<'a> Generator<'a> {
                     Lit::U32(c),
                 )
                 .into(),
-            ),
-            AssignmentOp::Simple,
-            PostfixExpr::new(
-                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage,
-                ))),
-                self.gen_pattern_race_stmt(pattern_type, c),
-            ),
-        );
-
+        ));*/
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
         // used for the pattern)
         let mut num_statements = cmp::min(
@@ -1318,7 +1458,9 @@ impl<'a> Generator<'a> {
             num_statements -= gen_info.generated_statements;
         }
 
-        if_body_stmts.push(array_cast.into());
+        if_body_stmts.push(temporary_variable.into());
+        if_body_stmts.push(data_array_cast.into());
+        if_body_stmts.push(index_array_cast.into());
 
         // half the time we include an if statement as part of the pattern
         let mut pattern_stmts = if self.rng.gen_bool(0.5) {
