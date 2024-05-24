@@ -5,20 +5,20 @@ use serde::{Deserialize, Serialize};
 
 use ast::types::{DataType, MemoryViewType, ScalarType};
 use ast::{
-    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn, Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit, ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement, LhsExpr, LhsExprNode, Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, StructDecl, StructMember, StructMemberAttr, TypeConsExpr, VarDeclStatement, VarExpr, VarQualifier
+    AccessMode, AssignmentLhs, AssignmentOp, AssignmentStatement, BinOp, BinOpExpr, BuiltinFn, Else, ExprNode, FnAttr, FnCallExpr, FnDecl, FnInput, FnInputAttr, ForLoopHeader, ForLoopInit, ForLoopStatement, ForLoopUpdate, GlobalVarAttr, GlobalVarDecl, IfStatement, LetDeclStatement, LhsExpr, LhsExprNode, Lit, Module, Postfix, PostfixExpr, ShaderStage, Statement, StorageClass, StructDecl, StructMember, TypeConsExpr, VarDeclStatement, VarExpr, VarQualifier
 };
 
 use rand::distributions::WeightedIndex;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
-use tracing_subscriber::registry::Data;
 use std::cmp;
 
 const RACE_PATTERN_ADD_VAL: i32 = 512643019;
 const RACE_PATTERN_ADD_BASE: i32 = 1751312910;
 const RACE_PATTERN_MULT_VAL: i32 = 4;
 const RACE_PATTERN_MULT_BASE: i32 = 998768123;
+const WORKGROUP_BUF_SIZE: u32 = 256;
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 enum AccessType {
@@ -131,6 +131,7 @@ pub struct Generator<'a> {
     pattern_types: Vec<RacePatternType>,
     pattern_type_weights: WeightedIndex<i32>,
     pattern_slots_used: u32,
+    pattern_temp_vars_used: u32,
     data_index_pair: std::rc::Rc<StructDecl>,
 }
 
@@ -309,6 +310,7 @@ impl<'a> Generator<'a> {
             pattern_types: pattern_types,
             pattern_type_weights: pattern_weights,
             pattern_slots_used: 0,
+            pattern_temp_vars_used: 0,
             data_index_pair: data_index_pair
         }
     }
@@ -432,7 +434,7 @@ impl<'a> Generator<'a> {
                     access_mode: None,
                 }),
                 name: "workgroup_buf".to_owned(),
-                data_type: DataType::array(ScalarType::U32, 128),
+                data_type: DataType::array(ScalarType::U32, WORKGROUP_BUF_SIZE),
                 initializer: None,
             },
         ];
@@ -547,8 +549,7 @@ impl<'a> Generator<'a> {
         block.push(dummy_data_buf_stmt.clone());
         safe_block.push(dummy_data_buf_stmt);
 
-        let dummy_output_buf_stmt =
-            self.gen_dummy_stmt("dummy_output_var", "output_buf", ScalarType::U32);
+        let dummy_output_buf_stmt = self.gen_dummy_output_stmt();
         block.push(dummy_output_buf_stmt.clone());
         safe_block.push(dummy_output_buf_stmt);
 
@@ -638,6 +639,22 @@ impl<'a> Generator<'a> {
             dummy_var,
             Some(data_type.into()),
             Some(PostfixExpr::new(arr_expr, index).into()),
+        )
+        .into()
+    }
+
+    fn gen_dummy_output_stmt(&mut self) -> Statement {
+        let index = Postfix::index(Lit::U32(0));
+        let member = Postfix::member("data");
+        let data_type = DataType::Struct(self.data_index_pair.clone());
+        let arr_expr = VarExpr::new("output_buf").into_node(DataType::Ref(MemoryViewType::new(
+            DataType::array(data_type.to_owned(), None),
+            StorageClass::Storage,
+        )));
+        VarDeclStatement::new(
+            "dummy_output_var",
+            Some(data_type.into()),
+            Some(PostfixExpr::new(PostfixExpr::new(arr_expr, index), member).into()),
         )
         .into()
     }
@@ -836,9 +853,11 @@ impl<'a> Generator<'a> {
             // Gen loop
             return self.gen_for(stmts_left, nest_level + 1, racy_block);
         } else if decider < 95  {
-            return self.gen_workgroup_pattern(stmts_left, nest_level + 1, racy_block);
+            // generate device buffer pattern
+            return self.gen_pattern(stmts_left, nest_level + 1, racy_block, false);
         } else {
-            return self.gen_pattern(stmts_left, nest_level + 1, racy_block);
+            // generate workgroup buffer pattern
+            return self.gen_pattern(stmts_left, nest_level + 1, racy_block, true);
         }
     }
 
@@ -1082,6 +1101,36 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn gen_pattern_output_lhs(
+        &mut self,
+        c: u32,
+        member: &str 
+    ) -> LhsExprNode {
+        LhsExprNode {
+            data_type: DataType::Scalar(ScalarType::U32),
+            expr: LhsExpr::Postfix(
+                Box::new(LhsExprNode {
+                    data_type: DataType::Ref(MemoryViewType::new(
+                        DataType::array(ScalarType::U32, None),
+                        StorageClass::Storage,
+                    )),
+                    expr: LhsExpr::Postfix(
+                        Box::new(LhsExprNode {
+                            data_type: DataType::array(ScalarType::U32, None),
+                            expr: LhsExpr::Ident("output_buf".to_owned())
+                        }), 
+                        Postfix::Index(Box::new(BinOpExpr::new(
+                            BinOp::Plus,
+                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                            Lit::U32(c),
+                        ).into()))
+                    )
+                }),
+                Postfix::Member(member.to_owned())
+            )
+        }
+    }
+
     /*
        total_pattern_slots = total_ids * pattern_slots;
        pattern_index = id.x * pattern_slots;
@@ -1107,6 +1156,7 @@ impl<'a> Generator<'a> {
         stmts_left: u32,
         nest_level: u32,
         racy_block: bool,
+        workgroup_pattern: bool,
     ) -> StatementGenInfo {
         if stmts_left < 4 || self.options.pattern_slots == self.pattern_slots_used {
             return self.gen_statement(stmts_left, nest_level, racy_block);
@@ -1140,84 +1190,40 @@ impl<'a> Generator<'a> {
         let mut if_body_stmts: Vec<Statement> = Vec::new();
 
         // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
-        // There has to be a better way to do this??? This feels like javascript
-        let output_data_lhs = LhsExprNode {
-            data_type: DataType::Scalar(ScalarType::U32),
-            expr: LhsExpr::Postfix(
-                Box::new(LhsExprNode {
-                    data_type: DataType::Ref(MemoryViewType::new(
-                        DataType::array(ScalarType::U32, None),
-                        StorageClass::Storage,
-                    )),
-                    expr: LhsExpr::Postfix(
-                        Box::new(LhsExprNode {
-                            data_type: DataType::array(ScalarType::U32, None),
-                            expr: LhsExpr::Ident("output_buf".to_owned())
-                        }), 
-                        Postfix::Index(Box::new(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c),
-                        ).into()))
-                    )
-                }),
-                Postfix::Member("data".to_owned())
-            )
-        };
+        let output_data_lhs = self.gen_pattern_output_lhs(c, "data");
+        let output_index_lhs = self.gen_pattern_output_lhs(c, "index");
 
-        let output_index_lhs = LhsExprNode {
-            data_type: DataType::Scalar(ScalarType::U32),
-            expr: LhsExpr::Postfix(
-                Box::new(LhsExprNode {
-                    data_type: DataType::Ref(MemoryViewType::new(
-                        DataType::array(ScalarType::U32, None),
-                        StorageClass::Storage,
-                    )),
-                    expr: LhsExpr::Postfix(
-                        Box::new(LhsExprNode {
-                            data_type: DataType::array(ScalarType::U32, None),
-                            expr: LhsExpr::Ident("output_buf".to_owned())
-                        }), 
-                        Postfix::Index(Box::new(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c),
-                        ).into()))
-                    )
-                }),
-                Postfix::Member("index".to_owned())
-            )
-        }; 
-        
-        let unwrapped_index = match self.gen_pattern_race_stmt(pattern_type, c) {
-            Postfix::Index(a) => *a,
-            Postfix::Member(_) => panic!("What?"),
-        };
-
-        let temporary_variable = LetDeclStatement::new(
-            "temp",
-            unwrapped_index.clone()
+        let t_i = self.pattern_temp_vars_used;
+        self.pattern_temp_vars_used += 1;
+        let temp_var = format!("temp_{t_i}");
+        let temp_idx = LetDeclStatement::new(
+            temp_var.to_owned(),
+            self.gen_pattern_race_idx(pattern_type, c, workgroup_pattern)
         );
+
+        let buf_ident = if workgroup_pattern {
+          "workgroup_buf"
+        } else {
+          "data_buf"
+        };
 
         let data_array_cast = AssignmentStatement::new(
             AssignmentLhs::Expr(output_data_lhs),
             AssignmentOp::Simple,
             PostfixExpr::new(
-                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
+                VarExpr::new(buf_ident).into_node(DataType::Ref(MemoryViewType::new(
                     DataType::array(ScalarType::U32, None),
                     StorageClass::Storage,
                 ))),
-                Postfix::Index(Box::new(VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32)))),
+                Postfix::Index(Box::new(VarExpr::new(temp_var.to_owned()).into_node(DataType::from(ScalarType::U32)))),
             ),
         );
         
         let index_array_cast = AssignmentStatement::new(
             AssignmentLhs::Expr(output_index_lhs),
             AssignmentOp::Simple,
-            VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32))
+            VarExpr::new(temp_var).into_node(DataType::from(ScalarType::U32))
         );
-
-        
 
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
         // used for the pattern)
@@ -1233,14 +1239,14 @@ impl<'a> Generator<'a> {
             num_statements -= gen_info.generated_statements;
         }
 
-        if_body_stmts.push(temporary_variable.into());
+        if_body_stmts.push(temp_idx.into());
         if_body_stmts.push(data_array_cast.into());
         if_body_stmts.push(index_array_cast.into());
 
         // half the time we include an if statement as part of the pattern
         let mut pattern_stmts = if self.rng.gen_bool(0.5) {
             let if_stmt = IfStatement::new(
-                self.gen_pattern_cond(pattern_type, c),
+                self.gen_pattern_cond(pattern_type, c, workgroup_pattern),
                 if_body_stmts.clone(),
             );
             vec![if_stmt.into()]
@@ -1279,7 +1285,7 @@ impl<'a> Generator<'a> {
                 .into(),
             ),
             AssignmentOp::Simple,
-            self.gen_pattern_race_val(pattern_type),
+            self.gen_pattern_race_val(pattern_type, workgroup_pattern),
         );
 
         pattern_stmts.insert(0, assign.into());
@@ -1292,232 +1298,7 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /*
-       total_pattern_slots = total_ids * pattern_slots;
-       pattern_index = id.x * pattern_slots;
-
-       index_buf[total_pattern_slots]
-       workgroup_buf[256]
-       output_buf[total_pattern_slots]
-
-       c = 0..pattern_slots
-
-       for c in pattern_slots:
-       index_buf[pattern_index + c] = 0
-
-       if (index_buf[pattern_index + c] < total_ids) {
-           statements...
-
-           output_buf[pattern_index + c].data = workgroup_buf[index_buf[pattern_index + c]]
-           output_buf[pattern_index + c].index = index_buf[pattern_index + c]
-
-       }
-       pattern_assignment();
-    */
-    fn gen_workgroup_pattern(
-        &mut self,
-        stmts_left: u32,
-        nest_level: u32,
-        racy_block: bool,
-    ) -> StatementGenInfo {
-        if stmts_left < 4 || self.options.pattern_slots == self.pattern_slots_used {
-            return self.gen_statement(stmts_left, nest_level, racy_block);
-        }
-
-        let pattern_type = self.pattern_types[self.pattern_type_weights.sample(self.rng)];
-
-        let c = self.pattern_slots_used;
-
-        self.pattern_slots_used += 1;
-
-        // Index assignment: index_buf[pattern_index + c] = 0
-        let assign = AssignmentStatement::new(
-            AssignmentLhs::array_index(
-                "index_buf",
-                DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::I32, None),
-                    StorageClass::Storage,
-                )),
-                BinOpExpr::new(
-                    BinOp::Plus,
-                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c),
-                )
-                .into(),
-            ),
-            AssignmentOp::Simple,
-            Lit::I32(self.gen_pattern_init(pattern_type)),
-        );
-
-        let mut if_body_stmts: Vec<Statement> = Vec::new();
-
-        // output_buf[pattern_index + c].data = data_buf[index_buf[pattern_index + c]]
-        // output_buf[pattern_index + c].index = index_buf[pattern_index + c]
-        let output_data_lhs = LhsExprNode {
-            data_type: DataType::Scalar(ScalarType::U32),
-            expr: LhsExpr::Postfix(
-                Box::new(LhsExprNode {
-                    data_type: DataType::Ref(MemoryViewType::new(
-                        DataType::array(ScalarType::U32, None),
-                        StorageClass::Storage,
-                    )),
-                    expr: LhsExpr::Postfix(
-                        Box::new(LhsExprNode {
-                            data_type: DataType::array(ScalarType::U32, None),
-                            expr: LhsExpr::Ident("output_buf".to_owned())
-                        }), 
-                        Postfix::Index(Box::new(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c),
-                        ).into()))
-                    )
-                }),
-                Postfix::Member("data".to_owned())
-            )
-        };
-
-        let output_index_lhs = LhsExprNode {
-            data_type: DataType::Scalar(ScalarType::U32),
-            expr: LhsExpr::Postfix(
-                Box::new(LhsExprNode {
-                    data_type: DataType::Ref(MemoryViewType::new(
-                        DataType::array(ScalarType::U32, None),
-                        StorageClass::Storage,
-                    )),
-                    expr: LhsExpr::Postfix(
-                        Box::new(LhsExprNode {
-                            data_type: DataType::array(ScalarType::U32, None),
-                            expr: LhsExpr::Ident("output_buf".to_owned())
-                        }), 
-                        Postfix::Index(Box::new(BinOpExpr::new(
-                            BinOp::Plus,
-                            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                            Lit::U32(c),
-                        ).into()))
-                    )
-                }),
-                Postfix::Member("index".to_owned())
-            )
-        }; 
-
-        let unwrapped_index = match self.gen_pattern_race_stmt(pattern_type, c) {
-            Postfix::Index(a) => *a,
-            Postfix::Member(_) => panic!("What?"),
-        };
-
-        let temporary_variable = LetDeclStatement::new(
-            "temp",
-            unwrapped_index.clone()
-        );
-
-        let data_array_cast = AssignmentStatement::new(
-            AssignmentLhs::Expr(output_data_lhs),
-            AssignmentOp::Simple,
-            PostfixExpr::new(
-                VarExpr::new("workgroup_buf").into_node(DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage,
-                ))),
-                Postfix::Index(Box::new(VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32)))),
-            ),
-        );
-        
-        let index_array_cast = AssignmentStatement::new(
-            AssignmentLhs::Expr(output_index_lhs),
-            AssignmentOp::Simple,
-            VarExpr::new("temp".to_owned()).into_node(DataType::from(ScalarType::U32))
-        );
-        /*let x = AssignmentLhs::member(
-            "output_buf".to_owned(),
-            ScalarType::U32,
-            AssignmentLhs::array_index(
-                "output_buf",
-                DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage,
-                )),
-                BinOpExpr::new(
-                    BinOp::Plus,
-                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c),
-                )
-                .into(),
-        ));*/
-        // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
-        // used for the pattern)
-        let mut num_statements = cmp::min(
-            self.rng.gen_range(1..self.options.block_max_stmts) - 1,
-            stmts_left - 3,
-        );
-        let generated_statements = num_statements + 3;
-
-        while num_statements > 0 {
-            let gen_info = self.gen_statement(num_statements, nest_level, true);
-            if_body_stmts.extend(gen_info.statements.iter().cloned());
-            num_statements -= gen_info.generated_statements;
-        }
-
-        if_body_stmts.push(temporary_variable.into());
-        if_body_stmts.push(data_array_cast.into());
-        if_body_stmts.push(index_array_cast.into());
-
-        // half the time we include an if statement as part of the pattern
-        let mut pattern_stmts = if self.rng.gen_bool(0.5) {
-            let if_stmt = IfStatement::new(
-                self.gen_pattern_cond(pattern_type, c),
-                if_body_stmts.clone(),
-            );
-            vec![if_stmt.into()]
-        } else {
-            if_body_stmts
-        };
-
-        // (index_buf[pattern_index + c] < total_ids)
-
-        // Handoff: index_buf[((id.x  + offset) % total_ids) * pattern_slots + c] =  id.x * pattern_slots + data_buf_size;
-        let handoff = AssignmentStatement::new(
-            AssignmentLhs::array_index(
-                "index_buf",
-                DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::U32, None),
-                    StorageClass::Storage,
-                )),
-                BinOpExpr::new(
-                    BinOp::Plus,
-                    BinOpExpr::new(
-                        BinOp::Times,
-                        BinOpExpr::new(
-                            BinOp::Mod,
-                            BinOpExpr::new(
-                                BinOp::Plus,
-                                VarExpr::new("global_invocation_id.x")
-                                    .into_node(DataType::from(ScalarType::U32)),
-                                Lit::U32(8),
-                            ),
-                            VarExpr::new("total_ids").into_node(DataType::from(ScalarType::U32)),
-                        ),
-                        Lit::U32(self.options.pattern_slots),
-                    ),
-                    Lit::U32(c),
-                )
-                .into(),
-            ),
-            AssignmentOp::Simple,
-            self.gen_pattern_race_val(pattern_type),
-        );
-
-        pattern_stmts.insert(0, assign.into());
-        pattern_stmts.push(handoff.into());
-
-        StatementGenInfo {
-            generated_statements: generated_statements,
-            statements: pattern_stmts.into(),
-            safe_statements: None,
-        }
-    }
-
-    fn gen_pattern_race_stmt(&mut self, pattern_type: RacePatternType, offset: u32) -> Postfix {
+    fn gen_pattern_race_idx(&mut self, pattern_type: RacePatternType, offset: u32, workgroup_pattern: bool) -> ExprNode {
         let base = PostfixExpr::new(
             VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
                 DataType::array(ScalarType::U32, None),
@@ -1537,19 +1318,31 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowAdd => {
                 BinOpExpr::new(BinOp::Plus, base, Lit::I32(RACE_PATTERN_ADD_VAL)).into()
             }
-            RacePatternType::DivideByZero => BinOpExpr::new(
-              BinOp::Divide,
-              Lit::I32((self.options.data_buf_size - 1).try_into().unwrap()),
-              base,
-            )
-            .into(),
+            RacePatternType::DivideByZero => {
+                let size = if workgroup_pattern {
+                  WORKGROUP_BUF_SIZE
+                } else {
+                  self.options.data_buf_size
+                };
+                BinOpExpr::new(
+                  BinOp::Divide,
+                Lit::I32((size - 1).try_into().unwrap()),
+                base,
+              ).into()
+          }
         };
-        Postfix::index(postfix_expr)
+        postfix_expr
     }
 
-    fn gen_pattern_race_val(&mut self, pattern_type: RacePatternType) -> ExprNode {
+    fn gen_pattern_race_val(&mut self, pattern_type: RacePatternType, workgroup_pattern: bool) -> ExprNode {
         match pattern_type {
-            RacePatternType::Basic => BinOpExpr::new(
+            RacePatternType::Basic => {
+              let size_to_add = if workgroup_pattern {
+                WORKGROUP_BUF_SIZE
+              } else {
+                self.options.data_buf_size
+              };
+              BinOpExpr::new(
                 BinOp::Plus,
                 BinOpExpr::new(
                     BinOp::Times,
@@ -1560,16 +1353,16 @@ impl<'a> Generator<'a> {
                     ),
                     Lit::I32(self.pattern_slots_used.try_into().unwrap()),
                 ),
-                Lit::I32(self.options.data_buf_size.try_into().unwrap()),
-            )
-            .into(),
+                Lit::I32(size_to_add.try_into().unwrap())
+              ).into()
+            },
             RacePatternType::IntegerOverflowMult => Lit::I32(RACE_PATTERN_MULT_BASE).into(),
             RacePatternType::IntegerOverflowAdd => Lit::I32(RACE_PATTERN_ADD_BASE).into(),
             RacePatternType::DivideByZero => Lit::I32(0).into(),
         }
     }
 
-    fn gen_pattern_cond(&mut self, pattern_type: RacePatternType, offset: u32) -> BinOpExpr {
+    fn gen_pattern_cond(&mut self, pattern_type: RacePatternType, offset: u32, workgroup_pattern: bool) -> BinOpExpr {
         let index_buf_access = PostfixExpr::new(
             VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
                 DataType::array(ScalarType::U32, None),
@@ -1582,10 +1375,17 @@ impl<'a> Generator<'a> {
             )),
         );
         match pattern_type {
-            RacePatternType::Basic => BinOpExpr::new(
+            RacePatternType::Basic => {
+              let comp_size = if workgroup_pattern {
+                WORKGROUP_BUF_SIZE
+              } else {
+                self.options.data_buf_size
+              };
+              BinOpExpr::new(
                 BinOp::Less,
                 index_buf_access,
-                Lit::I32(self.options.data_buf_size.try_into().unwrap())),
+                Lit::I32(comp_size.try_into().unwrap()))
+              },
             RacePatternType::IntegerOverflowMult => BinOpExpr::new(
               BinOp::LessEqual,
               index_buf_access,
