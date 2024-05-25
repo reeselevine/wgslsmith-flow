@@ -13,6 +13,7 @@ use rand::prelude::{SliceRandom, StdRng};
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 use std::cmp;
+use std::collections::VecDeque;
 
 const RACE_PATTERN_ADD_VAL: i32 = 512643019;
 const RACE_PATTERN_ADD_BASE: i32 = 1751312910;
@@ -113,8 +114,8 @@ pub fn gen_result(options: &GenOptions) -> Result<Shaders, GenFailure> {
 pub struct Generator<'a> {
     rng: &'a mut StdRng,
     options: &'a GenOptions,
-    safe_vars: Vec<String>,
-    racy_vars: Vec<String>,
+    safe_vars: VecDeque<String>,
+    racy_vars: VecDeque<String>,
     uninit_vars: Vec<String>,
     lits: Vec<u32>,
     safe_offsets: Vec<u32>,
@@ -212,17 +213,17 @@ impl<'a> Generator<'a> {
         }
 
         // local variables are also divided into safe and racy
-        let mut racy_vars = vec![];
-        let mut safe_vars = vec![];
+        let mut racy_vars = VecDeque::from(vec![]);
+        let mut safe_vars = VecDeque::from(vec![]);
         for i in 0..options.vars {
             let name = format!("var_{i}");
             if Self::rng_less_than(rng, options.racy_var_pct) {
-                racy_vars.push(name.to_owned());
+                racy_vars.push_back(name.to_owned());
                 Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarUnsafe);
                 Self::add_if_not_exists(&mut racy_lhs_access_types, AccessType::VarUnsafe);
                 Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarUnsafe);
             } else {
-                safe_vars.push(name.to_owned());
+                safe_vars.push_back(name.to_owned());
                 Self::add_if_not_exists(&mut lhs_access_types, AccessType::VarSafe);
                 Self::add_if_not_exists(&mut rhs_access_types, AccessType::VarSafe);
                 Self::add_if_not_exists(&mut safe_rhs_access_types, AccessType::VarSafe);
@@ -617,7 +618,7 @@ impl<'a> Generator<'a> {
                 safe_constants: self.safe_constant_locs.clone(),
                 constant_locs: self.options.constant_locs,
                 num_uninit_vars: self.options.uninit_vars,
-                safe_vars: self.safe_vars.clone(),
+                safe_vars: self.safe_vars.clone().into(),
                 race_val_strat: self.options.race_val_strat,
                 data_buf_size: self.options.data_buf_size,
                 pattern_slots: self.options.pattern_slots,
@@ -776,8 +777,8 @@ impl<'a> Generator<'a> {
         PostfixExpr::new(arr_expr, index).into()
     }
 
-    fn var_expr(&mut self, choices: Vec<String>) -> ExprNode {
-        VarExpr::new(choices.choose(self.rng).unwrap()).into_node(DataType::from(ScalarType::U32))
+    fn var_expr(&mut self, choice: &String) -> ExprNode {
+        VarExpr::new(choice).into_node(DataType::from(ScalarType::U32))
     }
 
     fn gen_op(&mut self, access_type: AccessType) -> ExprNode {
@@ -786,12 +787,16 @@ impl<'a> Generator<'a> {
                 ExprNode::from(Lit::U32(self.lits.choose(self.rng).unwrap().to_owned()))
             }
             AccessType::VarSafe => {
-                let choices = self.safe_vars.to_owned();
-                self.var_expr(choices)
+                let choice = self.safe_vars.pop_front().unwrap();
+                let expr = self.var_expr(&choice);
+                self.safe_vars.push_back(choice);
+                expr
             }
             AccessType::VarUnsafe => {
-                let choices = self.racy_vars.to_owned();
-                self.var_expr(choices)
+                let choice = self.racy_vars.pop_front().unwrap();
+                let expr = self.var_expr(&choice);
+                self.racy_vars.push_back(choice);
+                expr
             }
             _ => self.gen_mem_access(access_type),
         }
@@ -805,10 +810,31 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn gen_reg_pressure_expr(&mut self, expr: ExprNode, base_access_type: &AccessType) -> ExprNode {
+      let mut final_expr: ExprNode = expr;
+      for _ in 0..self.rng.gen_range(0..20) {
+          let var_type = if SAFE_ACCESS_TYPES.contains(base_access_type) {
+              if !self.safe_vars.is_empty() {
+                AccessType::VarSafe 
+              } else {
+                AccessType::Literal
+              }
+          } else {
+              let mut choices = vec![AccessType::VarSafe];
+              if !self.racy_vars.is_empty() {
+                choices.push(AccessType::VarUnsafe);
+              }
+              *choices.choose(self.rng).unwrap()
+          };
+          final_expr = BinOpExpr::new(BinOp::Plus, final_expr, self.gen_op(var_type)).into()
+      }
+      final_expr
+    }
+
     fn gen_expr(&mut self, access_type: &AccessType) -> ExprNode {
         let operand_weight = self.rng.gen_range(0..100);
         // 30% of the time we generate a single operand
-        if operand_weight < 30 {
+        let base_expr = if operand_weight < 30 {
             let uni_type = self.operand_access_ty(access_type);
             self.gen_op(uni_type)
         } else {
@@ -827,6 +853,11 @@ impl<'a> Generator<'a> {
                 let third_access_type = self.operand_access_ty(access_type);
                 BinOpExpr::new(BinOp::Plus, expr, self.gen_op(third_access_type)).into()
             }
+        };
+        if self.options.reg_pressure {
+            self.gen_reg_pressure_expr(base_expr, access_type)
+        } else {
+            base_expr
         }
     }
 
@@ -871,7 +902,8 @@ impl<'a> Generator<'a> {
         let expr = self.gen_expr(&lhs_access_type.clone());
         let stmt: Statement = match lhs_access_type {
             AccessType::VarSafe => {
-                let var = self.safe_vars.choose(self.rng).unwrap();
+                let var_vec: Vec<String> = self.safe_vars.clone().into();
+                let var = var_vec.choose(self.rng).unwrap();
                 AssignmentStatement::new(
                     AssignmentLhs::name(var, DataType::from(ScalarType::U32)),
                     AssignmentOp::Simple,
@@ -880,7 +912,8 @@ impl<'a> Generator<'a> {
                 .into()
             }
             AccessType::VarUnsafe => {
-                let var = self.racy_vars.choose(self.rng).unwrap();
+                let var_vec: Vec<String> = self.racy_vars.clone().into();
+                let var = var_vec.choose(self.rng).unwrap();
                 AssignmentStatement::new(
                     AssignmentLhs::name(var, DataType::from(ScalarType::U32)),
                     AssignmentOp::Simple,
