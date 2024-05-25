@@ -277,7 +277,7 @@ impl<'a> Generator<'a> {
                 StructMember::new(
                     vec![],
                     "index",
-                    ScalarType::U32.into()
+                    ScalarType::I32.into()
                 ),
                 StructMember::new(
                     vec![],
@@ -648,14 +648,14 @@ impl<'a> Generator<'a> {
     fn gen_dummy_output_stmt(&mut self) -> Statement {
         let index = Postfix::index(Lit::U32(0));
         let member = Postfix::member("data");
-        let data_type = DataType::Struct(self.data_index_pair.clone());
+        let rhs_data_type = DataType::Struct(self.data_index_pair.clone());
         let arr_expr = VarExpr::new("output_buf").into_node(DataType::Ref(MemoryViewType::new(
-            DataType::array(data_type.to_owned(), None),
+            DataType::array(rhs_data_type.to_owned(), None),
             StorageClass::Storage,
         )));
         VarDeclStatement::new(
             "dummy_output_var",
-            Some(data_type.into()),
+            Some(ScalarType::U32.into()),
             Some(PostfixExpr::new(PostfixExpr::new(arr_expr, index), member).into()),
         )
         .into()

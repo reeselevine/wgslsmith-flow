@@ -16,6 +16,11 @@ pub struct ExecOptions {
     pub check_mismatches: Vec<MismatchType>,
 }
 
+pub struct IndexDataPair {
+  pub index: i32,
+  pub data: u32 
+}
+
 #[derive(Debug, Serialize)]
 pub enum Expected {
     Value(u32),
@@ -37,7 +42,7 @@ pub struct Mismatch {
     pub rep: u32,
     pub mismatch_type: MismatchType,
     pub thread: Option<u32>,
-    pub index: u32,
+    pub index: i32,
     pub expected: Expected,
     pub actual: u32,
 }
@@ -77,7 +82,7 @@ pub fn execute(
 
             //let index_buf_output = u8s_to_u32s(&race_output[2]);
             //let data_buf_output = u8s_to_u32s(&race_output[3]);
-            let race_pattern_output = u8s_to_u32s(&race_output[4]);
+            let race_pattern_output = u8s_to_idx_data_pairs(&race_output[4]);
 
             //println!("{:?}", index_buf_output);
             //println!("{:?}", data_buf_output);
@@ -96,7 +101,7 @@ pub fn execute(
                                 rep,
                                 mismatch_type: MismatchType::ConstantLocation,
                                 thread: None,
-                                index: u32::try_from(index).unwrap(),
+                                index: i32::try_from(index).unwrap(),
                                 expected: Expected::Value(safe_array[index]),
                                 actual: race_array[index],
                             });
@@ -110,7 +115,7 @@ pub fn execute(
                                     rep,
                                     mismatch_type: MismatchType::ConstantLocation,
                                     thread: None,
-                                    index: u32::try_from(index).unwrap(),
+                                    index: i32::try_from(index).unwrap(),
                                     expected: Expected::Strategy(RaceValueStrategy::Even),
                                     actual: race_array[index],
                                 });
@@ -138,7 +143,7 @@ pub fn execute(
                                 rep,
                                 mismatch_type: MismatchType::UninitializedVar,
                                 thread: Some(thread_id),
-                                index: u32::try_from(ind).unwrap(),
+                                index: i32::try_from(ind).unwrap(),
                                 expected: Expected::Value(0),
                                 actual: safe_uninit_array[ind],
                             });
@@ -149,7 +154,7 @@ pub fn execute(
                                 rep,
                                 mismatch_type: MismatchType::UninitializedVar,
                                 thread: Some(thread_id),
-                                index: u32::try_from(ind).unwrap(),
+                                index: i32::try_from(ind).unwrap(),
                                 expected: Expected::Value(0),
                                 actual: race_uninit_array[ind],
                             });
@@ -164,15 +169,15 @@ pub fn execute(
                         let ind: usize =
                             usize::try_from(thread_id * data_race_info.pattern_slots + offset)
                                 .unwrap();
-                        if race_pattern_output[ind] != 0 {
+                        if race_pattern_output[ind].data != 0 {
                             mismatches.push(Mismatch {
                                 config: config.clone(),
                                 rep,
                                 mismatch_type: MismatchType::OobRead,
                                 thread: Some(thread_id),
-                                index: u32::try_from(ind).unwrap(),
+                                index: race_pattern_output[ind].index,
                                 expected: Expected::Value(0),
-                                actual: race_pattern_output[ind],
+                                actual: race_pattern_output[ind].data,
                             });
                         }
                     }
@@ -194,7 +199,7 @@ pub fn execute(
                                     rep,
                                     mismatch_type: MismatchType::SafeLocation,
                                     thread: Some(thread_id),
-                                    index: u32::try_from(ind).unwrap(),
+                                    index: i32::try_from(ind).unwrap(),
                                     expected: Expected::Value(safe_array[ind]),
                                     actual: race_array[ind],
                                 });
@@ -208,7 +213,7 @@ pub fn execute(
                                         rep,
                                         mismatch_type: MismatchType::SafeLocation,
                                         thread: Some(thread_id),
-                                        index: u32::try_from(ind).unwrap(),
+                                        index: i32::try_from(ind).unwrap(),
                                         expected: Expected::Strategy(RaceValueStrategy::Even),
                                         actual: race_array[ind],
                                     });
@@ -246,4 +251,18 @@ fn u8s_to_u32s(from: &Vec<u8>) -> Vec<u32> {
         vec32.push(u);
     }
     vec32
+}
+
+fn u8s_to_idx_data_pairs(from: &Vec<u8>) -> Vec<IndexDataPair> {
+    use byteorder::{LittleEndian, ReadBytesExt};
+    let mut rdr = Cursor::new(from);
+    let mut vec_idx_data_pairs: Vec<IndexDataPair> = vec![];
+    let mut dst = vec![0, 0];
+    while let Ok(_) = rdr.read_i32_into::<LittleEndian>(&mut dst) {
+      vec_idx_data_pairs.push(IndexDataPair {
+        index: dst[0],
+        data: dst[1].try_into().unwrap()
+      });
+    }
+    vec_idx_data_pairs
 }
