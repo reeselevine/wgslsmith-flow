@@ -71,7 +71,13 @@ impl DataType {
       match self {
         // all currently supported scalars are four bytes
         DataType::Scalar(_) => 4,
-        _ => unimplemented!()
+        DataType::Struct(a) =>
+          a.members.clone().into_iter().fold(0,
+            |acc, e| acc + e.data_type.size_bytes()),
+        _ => {
+          println!("{self}");
+          unimplemented!()
+        }
       }
     }
 

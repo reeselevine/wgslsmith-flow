@@ -269,7 +269,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 ); // data pattern buffer
                 input_info.insert(
                     "0:4".to_owned(),
-                    BufferInitInfo::Size { size: pattern_bufs_size }
+                    BufferInitInfo::Size { size: pattern_bufs_size * 2 }
                 ); // output pattern buffer
 
                 let mut racy_buf = Vec::new();
