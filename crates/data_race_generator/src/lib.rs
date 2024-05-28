@@ -777,8 +777,22 @@ impl<'a> Generator<'a> {
         PostfixExpr::new(arr_expr, index).into()
     }
 
-    fn var_expr(&mut self, choice: &String) -> ExprNode {
-        VarExpr::new(choice).into_node(DataType::from(ScalarType::U32))
+    fn var_expr(&mut self, safe: bool) -> ExprNode {
+        let choices = if safe {
+          &mut self.safe_vars
+        } else {
+          &mut self.racy_vars
+        };
+        let choice = if self.options.reg_pressure {
+          choices.pop_front().unwrap()
+        } else {
+          choices.make_contiguous().choose(self.rng).unwrap().into()
+        };
+        let expr = VarExpr::new(choice.clone()).into_node(DataType::from(ScalarType::U32));
+        if self.options.reg_pressure {
+          choices.push_back(choice);
+        }
+        expr
     }
 
     fn gen_op(&mut self, access_type: AccessType) -> ExprNode {
@@ -787,16 +801,10 @@ impl<'a> Generator<'a> {
                 ExprNode::from(Lit::U32(self.lits.choose(self.rng).unwrap().to_owned()))
             }
             AccessType::VarSafe => {
-                let choice = self.safe_vars.pop_front().unwrap();
-                let expr = self.var_expr(&choice);
-                self.safe_vars.push_back(choice);
-                expr
+                self.var_expr(true)
             }
             AccessType::VarUnsafe => {
-                let choice = self.racy_vars.pop_front().unwrap();
-                let expr = self.var_expr(&choice);
-                self.racy_vars.push_back(choice);
-                expr
+                self.var_expr(false)
             }
             _ => self.gen_mem_access(access_type),
         }
@@ -902,8 +910,7 @@ impl<'a> Generator<'a> {
         let expr = self.gen_expr(&lhs_access_type.clone());
         let stmt: Statement = match lhs_access_type {
             AccessType::VarSafe => {
-                let var_vec: Vec<String> = self.safe_vars.clone().into();
-                let var = var_vec.choose(self.rng).unwrap();
+                let var = self.safe_vars.make_contiguous().choose(self.rng).unwrap();
                 AssignmentStatement::new(
                     AssignmentLhs::name(var, DataType::from(ScalarType::U32)),
                     AssignmentOp::Simple,
@@ -912,8 +919,7 @@ impl<'a> Generator<'a> {
                 .into()
             }
             AccessType::VarUnsafe => {
-                let var_vec: Vec<String> = self.racy_vars.clone().into();
-                let var = var_vec.choose(self.rng).unwrap();
+                let var = self.racy_vars.make_contiguous().choose(self.rng).unwrap();
                 AssignmentStatement::new(
                     AssignmentLhs::name(var, DataType::from(ScalarType::U32)),
                     AssignmentOp::Simple,
