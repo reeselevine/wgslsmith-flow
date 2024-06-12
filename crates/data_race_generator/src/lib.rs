@@ -39,6 +39,9 @@ enum RacePatternType {
     IntegerOverflowMult,
     IntegerOverflowAdd,
     DivideByZero,
+    ModuloByZero,
+    DivideByIntMin,
+    ModuloByIntMin
 }
 
 #[derive(Serialize, Deserialize, Debug, ArgEnum, Clone, Copy)]
@@ -90,7 +93,7 @@ pub struct GenOptions {
     pub oob_pct: u32,
     pub data_buf_size: u32,
     pub pattern_slots: u32,
-    pub pattern_weights: (i32, i32, i32, i32),
+    pub pattern_weights: (i32, i32, i32, i32, i32, i32, i32),
     pub reg_pressure: bool
 }
 
@@ -269,6 +272,9 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowMult,
             RacePatternType::IntegerOverflowAdd,
             RacePatternType::DivideByZero,
+            RacePatternType::ModuloByZero,
+            RacePatternType::DivideByIntMin,
+            RacePatternType::ModuloByIntMin,
         ];
 
         let data_index_pair = StructDecl::new(
@@ -288,7 +294,7 @@ impl<'a> Generator<'a> {
         );
         
         // terrible fix later
-        let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3]).unwrap();
+        let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3, options.pattern_weights.4, options.pattern_weights.5, options.pattern_weights.6]).unwrap();
 
         Generator {
             rng,
@@ -1370,6 +1376,42 @@ impl<'a> Generator<'a> {
                 base,
               ).into()
           }
+          RacePatternType::ModuloByZero => {
+            let size = if workgroup_pattern {
+              WORKGROUP_BUF_SIZE
+            } else {
+              self.options.data_buf_size
+            };
+            BinOpExpr::new(
+              BinOp::Divide,
+            Lit::I32((size - 1).try_into().unwrap()),
+            base,
+          ).into()
+      }
+          RacePatternType::DivideByIntMin => {
+            let size = if workgroup_pattern {
+                WORKGROUP_BUF_SIZE
+              } else {
+                self.options.data_buf_size
+              };
+              BinOpExpr::new(
+                BinOp::Divide,
+              Lit::I32((size - 1).try_into().unwrap()),
+              base,
+            ).into()
+          }
+          RacePatternType::ModuloByIntMin => {
+            let size = if workgroup_pattern {
+                WORKGROUP_BUF_SIZE
+              } else {
+                self.options.data_buf_size
+              };
+              BinOpExpr::new(
+                BinOp::Mod,
+              Lit::I32((size - 1).try_into().unwrap()),
+              base,
+            ).into()
+          }
         };
         postfix_expr
     }
@@ -1399,6 +1441,9 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowMult => Lit::I32(RACE_PATTERN_MULT_BASE).into(),
             RacePatternType::IntegerOverflowAdd => Lit::I32(RACE_PATTERN_ADD_BASE).into(),
             RacePatternType::DivideByZero => Lit::I32(0).into(),
+            RacePatternType::ModuloByZero => Lit::I32(0).into(),
+            RacePatternType::DivideByIntMin => Lit::I32(i32::MIN).into(),
+            RacePatternType::ModuloByIntMin => Lit::I32(i32::MIN).into(),
         }
     }
 
@@ -1437,7 +1482,19 @@ impl<'a> Generator<'a> {
             RacePatternType::DivideByZero => BinOpExpr::new(
               BinOp::NotEqual,
               index_buf_access,
-              Lit::I32(0))
+              Lit::I32(0)),
+            RacePatternType::ModuloByZero => BinOpExpr::new(
+                BinOp::NotEqual,
+                index_buf_access,
+                Lit::I32(0)),
+            RacePatternType::DivideByIntMin => BinOpExpr::new(
+                BinOp::NotEqual,
+                index_buf_access,
+                Lit::I32(i32::MIN)),
+            RacePatternType::ModuloByIntMin => BinOpExpr::new(
+                BinOp::NotEqual,
+                index_buf_access,
+                Lit::I32(i32::MIN))
         }
     }
 
@@ -1448,3 +1505,4 @@ impl<'a> Generator<'a> {
         }
     }
 }
+
