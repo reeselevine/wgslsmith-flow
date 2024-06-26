@@ -1480,11 +1480,11 @@ impl<'a> Generator<'a> {
             RacePatternType::DivideByIntMin => BinOpExpr::new(
                 BinOp::NotEqual,
                 index_buf_access,
-                Lit::I32(i32::MIN)),
+                Lit::I32(-1)),
             RacePatternType::ModuloByIntMin => BinOpExpr::new(
                 BinOp::NotEqual,
                 index_buf_access,
-                Lit::I32(i32::MIN))
+                Lit::I32(-1))
         }
     }
 
