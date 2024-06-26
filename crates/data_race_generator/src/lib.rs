@@ -1383,32 +1383,22 @@ impl<'a> Generator<'a> {
               self.options.data_buf_size
             };
             BinOpExpr::new(
-              BinOp::Divide,
+              BinOp::Mod,
             Lit::I32((size - 1).try_into().unwrap()),
             base,
           ).into()
-      }
+          }
           RacePatternType::DivideByIntMin => {
-            let size = if workgroup_pattern {
-                WORKGROUP_BUF_SIZE
-              } else {
-                self.options.data_buf_size
-              };
-              BinOpExpr::new(
-                BinOp::Divide,
-              Lit::I32((size - 1).try_into().unwrap()),
+            BinOpExpr::new(
+              BinOp::Divide,
+              Lit::I32(-1),
               base,
             ).into()
           }
           RacePatternType::ModuloByIntMin => {
-            let size = if workgroup_pattern {
-                WORKGROUP_BUF_SIZE
-              } else {
-                self.options.data_buf_size
-              };
-              BinOpExpr::new(
-                BinOp::Mod,
-              Lit::I32((size - 1).try_into().unwrap()),
+            BinOpExpr::new(
+              BinOp::Mod,
+              Lit::I32(-1),
               base,
             ).into()
           }
