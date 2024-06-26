@@ -1391,14 +1391,14 @@ impl<'a> Generator<'a> {
           RacePatternType::DivideByIntMin => {
             BinOpExpr::new(
               BinOp::Divide,
-              Lit::I32(-1),
+              Lit::I32(i32::MIN),
               base,
             ).into()
           }
           RacePatternType::ModuloByIntMin => {
             BinOpExpr::new(
               BinOp::Mod,
-              Lit::I32(-1),
+              Lit::I32(i32::MIN),
               base,
             ).into()
           }
@@ -1432,8 +1432,8 @@ impl<'a> Generator<'a> {
             RacePatternType::IntegerOverflowAdd => Lit::I32(RACE_PATTERN_ADD_BASE).into(),
             RacePatternType::DivideByZero => Lit::I32(0).into(),
             RacePatternType::ModuloByZero => Lit::I32(0).into(),
-            RacePatternType::DivideByIntMin => Lit::I32(i32::MIN).into(),
-            RacePatternType::ModuloByIntMin => Lit::I32(i32::MIN).into(),
+            RacePatternType::DivideByIntMin => Lit::I32(-1).into(),
+            RacePatternType::ModuloByIntMin => Lit::I32(-1).into(),
         }
     }
 
