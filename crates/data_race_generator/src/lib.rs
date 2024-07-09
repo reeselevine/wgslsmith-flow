@@ -1214,25 +1214,6 @@ impl<'a> Generator<'a> {
 
         self.pattern_slots_used += 1;
 
-        // Index assignment: index_buf[pattern_index + c] = 0
-        let assign = AssignmentStatement::new(
-            AssignmentLhs::array_index(
-                "index_buf",
-                DataType::Ref(MemoryViewType::new(
-                    DataType::array(ScalarType::I32, None),
-                    StorageClass::Storage,
-                )),
-                BinOpExpr::new(
-                    BinOp::Plus,
-                    VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
-                    Lit::U32(c),
-                )
-                .into(),
-            ),
-            AssignmentOp::Simple,
-            Lit::I32(self.gen_pattern_init(pattern_type)),
-        );
-
         let mut if_body_stmts: Vec<Statement> = Vec::new();
 
         // Output buffer assignment: output_buf[pattern_index + c] = data_buf[index_buf[pattern_index + c]]
@@ -1334,7 +1315,7 @@ impl<'a> Generator<'a> {
             self.gen_pattern_race_val(pattern_type, workgroup_pattern),
         );
 
-        pattern_stmts.insert(0, assign.into());
+        pattern_stmts.insert(0, self.gen_pattern_init_block(c, pattern_type));
         pattern_stmts.push(handoff.into());
 
         StatementGenInfo {
@@ -1488,11 +1469,53 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn gen_pattern_init(&mut self, pattern_type: RacePatternType) -> i32 {
-        match pattern_type {
-            RacePatternType::DivideByZero => self.rng.gen_range(1..=4),
-            _ => self.rng.gen_range(0..=4),
-        }
+    // Index assignment: 
+    // if (data_buf[0] == 0) {
+    //   index_buf[pattern_index + c] = x <- random value less than size of data buf
+    // } else {
+    //   index_buf[pattern_index + c] = y <- some other random value less than size of data buf 
+    //}
+
+    fn gen_pattern_init_block(&mut self, pattern_offset: u32, pattern_type: RacePatternType) -> Statement {
+      let data_buf_access = PostfixExpr::new(
+        VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
+          DataType::array(ScalarType::U32, None),
+          StorageClass::Storage,
+        ))),
+        Postfix::index(Lit::U32(0))
+      );
+      let cond = BinOpExpr::new(
+        BinOp::Equal,
+        data_buf_access,
+        Lit::I32(0));
+      
+      IfStatement::new(
+        cond,
+        vec![self.gen_pattern_init(pattern_offset, pattern_type)])
+      .with_else(Else::Else(vec![self.gen_pattern_init(pattern_offset, pattern_type)])).into()
+    }
+
+    fn gen_pattern_init(&mut self, pattern_offset: u32, pattern_type: RacePatternType) -> Statement {
+      let init_value = match pattern_type {
+            RacePatternType::DivideByZero => self.rng.gen_range(1..=16),
+            _ => self.rng.gen_range(0..=16),
+        };
+
+      AssignmentStatement::new(
+        AssignmentLhs::array_index(
+          "index_buf",
+          DataType::Ref(MemoryViewType::new(
+            DataType::array(ScalarType::I32, None),
+            StorageClass::Storage,
+          )),
+          BinOpExpr::new(
+            BinOp::Plus,
+            VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+            Lit::U32(pattern_offset),
+            ).into()),
+        AssignmentOp::Simple,
+        Lit::I32(init_value)
+      ).into()
     }
 }
 
