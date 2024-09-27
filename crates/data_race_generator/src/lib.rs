@@ -1250,7 +1250,7 @@ impl<'a> Generator<'a> {
         let index_array_cast = AssignmentStatement::new(
             AssignmentLhs::Expr(output_index_lhs),
             AssignmentOp::Simple,
-            VarExpr::new(temp_var.to_owned()).into_node(DataType::from(ScalarType::U32))
+            TypeConsExpr::new(ScalarType::I32.into(), vec![VarExpr::new(temp_var.to_owned()).into_node(DataType::from(ScalarType::U32))])
         );
 
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
