@@ -165,7 +165,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
       locs_per_thread: options.locs_per_thread,
       constant_locs: options.constant_locs,
       race_val_strat: options.race_value_strategy,
-      pattern_weights: (16, 14, 14, 14, 14, 14, 14),
+      pattern_weights: (13, 13, 13, 13, 12, 12, 12, 12),
       oob_pct: options.oob_pct,
       data_buf_size: options.data_buf_size,
       pattern_slots: options.pattern_slots,

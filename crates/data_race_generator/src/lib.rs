@@ -41,7 +41,8 @@ enum RacePatternType {
     DivideByZero,
     ModuloByZero,
     DivideByIntMin,
-    ModuloByIntMin
+    ModuloByIntMin,
+    ControlFlow
 }
 
 #[derive(Serialize, Deserialize, Debug, ArgEnum, Clone, Copy)]
@@ -93,7 +94,7 @@ pub struct GenOptions {
     pub oob_pct: u32,
     pub data_buf_size: u32,
     pub pattern_slots: u32,
-    pub pattern_weights: (i32, i32, i32, i32, i32, i32, i32),
+    pub pattern_weights: (i32, i32, i32, i32, i32, i32, i32, i32),
     pub reg_pressure: bool
 }
 
@@ -275,6 +276,7 @@ impl<'a> Generator<'a> {
             RacePatternType::ModuloByZero,
             RacePatternType::DivideByIntMin,
             RacePatternType::ModuloByIntMin,
+            RacePatternType::ControlFlow
         ];
 
         let data_index_pair = StructDecl::new(
@@ -294,7 +296,7 @@ impl<'a> Generator<'a> {
         );
         
         // terrible fix later
-        let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3, options.pattern_weights.4, options.pattern_weights.5, options.pattern_weights.6]).unwrap();
+        let pattern_weights = WeightedIndex::new(vec![options.pattern_weights.0, options.pattern_weights.1, options.pattern_weights.2, options.pattern_weights.3, options.pattern_weights.4, options.pattern_weights.5, options.pattern_weights.6, options.pattern_weights.7]).unwrap();
 
         Generator {
             rng,
@@ -1223,10 +1225,9 @@ impl<'a> Generator<'a> {
         let t_i = self.pattern_temp_vars_used;
         self.pattern_temp_vars_used += 1;
         let temp_var = format!("temp_{t_i}");
-        let temp_idx = LetDeclStatement::new(
-            temp_var.to_owned(),
-            self.gen_pattern_race_idx(pattern_type, c, workgroup_pattern)
-        );
+        // either initialize the index directly, which might be racy, or create a variable that will be used as the index
+        // and which might be outside the bounds based on a dead code conditional later
+        let idx_init = self.gen_index_var_init(&temp_var, pattern_type, c, workgroup_pattern);
 
         let buf_ident = if workgroup_pattern {
           "workgroup_buf"
@@ -1249,7 +1250,7 @@ impl<'a> Generator<'a> {
         let index_array_cast = AssignmentStatement::new(
             AssignmentLhs::Expr(output_index_lhs),
             AssignmentOp::Simple,
-            VarExpr::new(temp_var).into_node(DataType::from(ScalarType::U32))
+            VarExpr::new(temp_var.to_owned()).into_node(DataType::from(ScalarType::U32))
         );
 
         // the block contains the minimum of a range of statements or the number of statements left (minus the three statements
@@ -1266,7 +1267,30 @@ impl<'a> Generator<'a> {
             num_statements -= gen_info.generated_statements;
         }
 
-        if_body_stmts.push(temp_idx.into());
+        if_body_stmts.push(idx_init);
+
+        // adds dead code that might not be dead if a data race occurs
+        if pattern_type == RacePatternType::ControlFlow {
+          let index_buf_access = PostfixExpr::new(
+            VarExpr::new("index_buf").into_node(DataType::Ref(MemoryViewType::new(
+                DataType::array(ScalarType::U32, None),
+                StorageClass::Storage,
+            ))),
+            Postfix::index(BinOpExpr::new(
+                BinOp::Plus,
+                VarExpr::new("pattern_index").into_node(DataType::from(ScalarType::U32)),
+                Lit::U32(c),
+            )),
+          );
+          let cf_if_stmt = IfStatement::new(
+            BinOpExpr::new(BinOp::Greater, index_buf_access, Lit::I32(50)),
+            vec![AssignmentStatement::new(
+              AssignmentLhs::name(temp_var, DataType::from(ScalarType::U32)),
+              AssignmentOp::Simple,
+              self.gen_pattern_race_val(pattern_type, workgroup_pattern)).into()]).into();
+          if_body_stmts.push(cf_if_stmt);
+        }
+
         if_body_stmts.push(data_array_cast.into());
         if_body_stmts.push(index_array_cast.into());
 
@@ -1383,13 +1407,16 @@ impl<'a> Generator<'a> {
               base,
             ).into()
           }
+          RacePatternType::ControlFlow => { // unused
+            Lit::U32(42).into()
+          }
         };
         postfix_expr
     }
 
     fn gen_pattern_race_val(&mut self, pattern_type: RacePatternType, workgroup_pattern: bool) -> ExprNode {
         match pattern_type {
-            RacePatternType::Basic => {
+            RacePatternType::Basic | RacePatternType::ControlFlow => {
               let size_to_add = if workgroup_pattern {
                 WORKGROUP_BUF_SIZE
               } else {
@@ -1431,7 +1458,7 @@ impl<'a> Generator<'a> {
             )),
         );
         match pattern_type {
-            RacePatternType::Basic => {
+            RacePatternType::Basic | RacePatternType::ControlFlow => {
               let comp_size = if workgroup_pattern {
                 WORKGROUP_BUF_SIZE
               } else {
@@ -1465,7 +1492,7 @@ impl<'a> Generator<'a> {
             RacePatternType::ModuloByIntMin => BinOpExpr::new(
                 BinOp::NotEqual,
                 index_buf_access,
-                Lit::I32(-1))
+                Lit::I32(-1)),
         }
     }
 
@@ -1493,6 +1520,41 @@ impl<'a> Generator<'a> {
         cond,
         vec![self.gen_pattern_init(pattern_offset, pattern_type)])
       .with_else(Else::Else(vec![self.gen_pattern_init(pattern_offset, pattern_type)])).into()
+    }
+
+    fn gen_index_var_init(&mut self, temp_var: &String, pattern_type: RacePatternType, c: u32, workgroup_pattern: bool) -> Statement {
+      match pattern_type {
+        RacePatternType::ControlFlow => {
+          let data_buf_access = PostfixExpr::new(
+            VarExpr::new("data_buf").into_node(DataType::Ref(MemoryViewType::new(
+              DataType::array(ScalarType::U32, None),
+              StorageClass::Storage,
+            ))),
+            Postfix::index(Lit::U32(0))
+          );
+          let init_temp = VarDeclStatement::new(
+            temp_var.clone(),
+            Some(ScalarType::U32.into()),
+            Some(ExprNode::from(Lit::U32(self.rng.gen_range(1..=16))))).into();
+          let cond = BinOpExpr::new(
+            BinOp::Equal,
+          data_buf_access,
+          Lit::I32(0));
+      
+          let if_stmt = IfStatement::new(
+            cond,
+            vec![AssignmentStatement::new(
+              AssignmentLhs::name(temp_var, DataType::from(ScalarType::U32)),
+              AssignmentOp::Simple,
+              ExprNode::from(Lit::U32(self.rng.gen_range(1..=16)))).into()]).into();
+          vec![init_temp, if_stmt].into()
+        }
+        _ => {
+          LetDeclStatement::new(
+            temp_var.to_owned(),
+            self.gen_pattern_race_idx(pattern_type, c, workgroup_pattern)).into()
+        }
+      }
     }
 
     fn gen_pattern_init(&mut self, pattern_offset: u32, pattern_type: RacePatternType) -> Statement {
