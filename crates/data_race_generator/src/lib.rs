@@ -1287,7 +1287,9 @@ impl<'a> Generator<'a> {
             vec![AssignmentStatement::new(
               AssignmentLhs::name(temp_var, DataType::from(ScalarType::U32)),
               AssignmentOp::Simple,
-              self.gen_pattern_race_val(pattern_type, workgroup_pattern)).into()]).into();
+              TypeConsExpr::new(
+                ScalarType::U32.into(),
+                vec![self.gen_pattern_race_val(pattern_type, workgroup_pattern)])).into()]).into();
           if_body_stmts.push(cf_if_stmt);
         }
 
