@@ -1227,7 +1227,7 @@ impl<'a> Generator<'a> {
         let temp_var = format!("temp_{t_i}");
         // either initialize the index directly, which might be racy, or create a variable that will be used as the index
         // and which might be outside the bounds based on a dead code conditional later
-        let idx_init = self.gen_index_var_init(&temp_var, pattern_type, c, workgroup_pattern);
+        let mut idx_init = self.gen_index_var_init(&temp_var, pattern_type, c, workgroup_pattern);
 
         let buf_ident = if workgroup_pattern {
           "workgroup_buf"
@@ -1267,7 +1267,7 @@ impl<'a> Generator<'a> {
             num_statements -= gen_info.generated_statements;
         }
 
-        if_body_stmts.push(idx_init);
+        if_body_stmts.append(&mut idx_init);
 
         // adds dead code that might not be dead if a data race occurs
         if pattern_type == RacePatternType::ControlFlow {
@@ -1522,7 +1522,7 @@ impl<'a> Generator<'a> {
       .with_else(Else::Else(vec![self.gen_pattern_init(pattern_offset, pattern_type)])).into()
     }
 
-    fn gen_index_var_init(&mut self, temp_var: &String, pattern_type: RacePatternType, c: u32, workgroup_pattern: bool) -> Statement {
+    fn gen_index_var_init(&mut self, temp_var: &String, pattern_type: RacePatternType, c: u32, workgroup_pattern: bool) -> Vec<Statement> {
       match pattern_type {
         RacePatternType::ControlFlow => {
           let data_buf_access = PostfixExpr::new(
@@ -1547,12 +1547,12 @@ impl<'a> Generator<'a> {
               AssignmentLhs::name(temp_var, DataType::from(ScalarType::U32)),
               AssignmentOp::Simple,
               ExprNode::from(Lit::U32(self.rng.gen_range(1..=16)))).into()]).into();
-          vec![init_temp, if_stmt].into()
+          vec![init_temp, if_stmt]
         }
         _ => {
-          LetDeclStatement::new(
+          vec![LetDeclStatement::new(
             temp_var.to_owned(),
-            self.gen_pattern_race_idx(pattern_type, c, workgroup_pattern)).into()
+            self.gen_pattern_race_idx(pattern_type, c, workgroup_pattern)).into()]
         }
       }
     }
