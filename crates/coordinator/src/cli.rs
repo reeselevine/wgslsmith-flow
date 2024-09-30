@@ -171,6 +171,7 @@ fn random_opts(disable_oob: bool, reg_pressure: bool) -> GenOptions {
         data_buf_size: rng.gen_range(10000..=250000),
         pattern_slots: rng.gen_range(1..=5),
         pattern_weights: (65, 5, 5, 5, 5, 5, 5, 5),
+        pattern_mem_weights: (50, 30, 20),
         reg_pressure: reg_pressure
     }
 }
@@ -228,6 +229,7 @@ pub fn run(options: Options) -> eyre::Result<()> {
                 data_buf_size: options.data_buf_size,
                 pattern_slots: options.pattern_slots,
                 pattern_weights: (65, 5, 5, 5, 5, 5, 5, 5),
+                pattern_mem_weights: (50, 30, 20),
                 reg_pressure: options.reg_pressure
             }
         };
