@@ -595,6 +595,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "data_race_reducer"
+version = "0.1.0"
+dependencies = [
+ "ast",
+ "bincode",
+ "byteorder",
+ "clap 3.2.25",
+ "colored",
+ "common",
+ "data_race_generator",
+ "eyre",
+ "harness",
+ "harness-types",
+ "parser",
+ "rand",
+ "reflection",
+ "reflection-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "data_race_runner"
 version = "0.1.0"
 dependencies = [
@@ -2613,6 +2635,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "data_race_generator",
+ "data_race_reducer",
  "data_race_runner",
  "directories",
  "edit",
